@@ -137,11 +137,17 @@
             </el-table-column>
           </el-table>
 
-          <el-divider style="margin:12px 0">从在库款箱中添加</el-divider>
+          <el-divider style="margin:12px 0">
+            {{ form.direction === 'outbound'
+              ? '从在库空闲款箱中添加（出库下解）'
+              : '从已送达网点的款箱中添加（回收上收）' }}
+          </el-divider>
           <el-select v-model="pickedBoxIds" multiple filterable collapse-tags
-                     collapse-tags-tooltip placeholder="选择在库空闲款箱"
+                     collapse-tags-tooltip
+                     :placeholder="form.direction === 'outbound'
+                       ? '选择在库空闲款箱' : '选择已送达网点、待回收款箱'"
                      style="width:100%" @change="syncChosen">
-            <el-option v-for="b in idleBoxes" :key="b.id" :value="b.id"
+            <el-option v-for="b in availableBoxes" :key="b.id" :value="b.id"
                        :label="`${b.box_no} ${b.box_type_display} ${b.owner_branch_name}`">
               <span class="mono">{{ b.box_no }}</span>
               {{ b.owner_branch_name }}
@@ -150,6 +156,9 @@
               </span>
             </el-option>
           </el-select>
+          <el-alert v-if="form.direction === 'inbound'" type="info" :closable="false"
+                    show-icon style="margin-top:10px"
+                    title="上收款箱将在其归属网点办理移交，款箱需与所选停靠网点一致" />
         </el-card>
       </el-col>
 
@@ -186,7 +195,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import api from '../api/http'
@@ -197,14 +206,24 @@ const routes = ref([])
 const vehicles = ref([])
 const staff = ref([])
 const idleBoxes = ref([])
+const deliveredBoxes = ref([])
 const pickedBoxIds = ref([])
 const chosenBoxes = ref([])
 const submitting = ref(false)
+
+const availableBoxes = computed(() =>
+  form.direction === 'outbound' ? idleBoxes.value : deliveredBoxes.value)
 
 const form = reactive({
   direction: 'outbound', route_id: null, vehicle_id: null,
   planned_date: new Date().toISOString().slice(0, 10),
   planned_depart: '08:00:00', planned_return: '', notes: '',
+})
+
+// 切换下解/上收：可选款箱状态不同，清空已选
+watch(() => form.direction, () => {
+  pickedBoxIds.value = []
+  chosenBoxes.value = []
 })
 
 const crewSlots = ref([
@@ -242,9 +261,16 @@ function onRouteChange() {
   chosenBoxes.value.forEach((b) => { b.seq = firstSeq })
 }
 function syncChosen(ids) {
-  chosenBoxes.value = idleBoxes.value
+  chosenBoxes.value = availableBoxes.value
     .filter((b) => ids.includes(b.id))
-    .map((b) => ({ ...b, seq: selectedRoute.value?.stops?.[0]?.sequence || 1 }))
+    .map((b) => ({ ...b, seq: firstStopForBox(b) }))
+}
+
+// 款箱归属网点匹配线路停靠点，自动选站
+function firstStopForBox(b) {
+  const stops = selectedRoute.value?.stops || []
+  return stops.find((s) => s.branch_name === b.owner_branch_name)?.sequence
+    || stops[0]?.sequence || 1
 }
 
 async function submit() {
@@ -287,17 +313,19 @@ async function submit() {
 }
 
 onMounted(async () => {
-  const [rs, vs, ss, bs] = await Promise.all([
+  const [rs, vs, ss, idleResp, deliveredResp] = await Promise.all([
     api.get('/api/routes/', { params: { page_size: 100, active: true } }),
     api.get('/api/vehicles/', { params: { page_size: 100 } }),
     api.get('/api/staff/', { params: { page_size: 200 } }),
-    api.get('/api/boxes/', { params: { page_size: 200, available: 1 } }),
+    api.get('/api/boxes/', { params: { page_size: 300, status: 'idle' } }),
+    api.get('/api/boxes/', { params: { page_size: 300, status: 'delivered' } }),
   ])
   routes.value = rs.results
   vehicles.value = vs.results
   staff.value = ss.results.filter((u) =>
     ['guard', 'driver'].includes(u.role))
-  idleBoxes.value = bs.results
+  idleBoxes.value = idleResp.results
+  deliveredBoxes.value = deliveredResp.results
   if (route.query.route) {
     form.route_id = Number(route.query.route)
     onRouteChange()

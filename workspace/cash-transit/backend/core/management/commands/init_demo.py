@@ -86,6 +86,7 @@ STAFF = [
     ('5005', '韩雪', 'branch_clerk', 'clerk', '13900005005', 'ZZ001'),
     ('5006', '杨万里', 'branch_clerk', 'clerk', '13900005006', 'ZZ002'),
     ('5007', '朱琳', 'branch_clerk', 'clerk', '13900005007', 'ZZ004'),
+    ('5008', '马晓康', 'branch_clerk', 'clerk', '13900005008', 'ZZ003'),
 ]
 
 # ---------- 款箱 ----------
@@ -300,20 +301,23 @@ class Command(BaseCommand):
         }, dispatcher)
         self._run_abnormal(t3, boxes, users)
 
-        # 4) 已派车待出发的上收任务：L04
+        # 4) 已派车待出发的上收任务：回收昨日下解、现停留在城西各网点的款箱
         t4 = TaskService.create_task({
-            'direction': 'inbound', 'route_id': routes['L04'].id,
+            'direction': 'inbound', 'route_id': routes['L01'].id,
             'vehicle_id': Vehicle.objects.get(plate='京A·Y8003').id,
             'planned_date': today,
-            'planned_depart': time(13, 30), 'planned_return': time(16, 0),
-            'name': '亚运村线尾箱上收任务', 'notes': '下午上收',
+            'planned_depart': time(13, 30), 'planned_return': time(16, 30),
+            'name': '城西线尾箱上收任务', 'notes': '下午回收昨日下解款箱',
             'assignees': [
                 {'user_id': users['2001'].id, 'role_on_task': 'car_captain'},
-                {'user_id': users['2006'].id, 'role_on_task': 'guard'},
+                {'user_id': users['2003'].id, 'role_on_task': 'guard'},
                 {'user_id': users['3003'].id, 'role_on_task': 'driver'}],
             'boxes': [
-                {'box_id': boxes['KX-YYC-01'].id, 'target_stop_sequence': 1},
-                {'box_id': boxes['KX-YYC-02'].id, 'target_stop_sequence': 1}],
+                {'box_id': boxes['KX-JRJ-01'].id, 'target_stop_sequence': 1},
+                {'box_id': boxes['KX-JRJ-02'].id, 'target_stop_sequence': 1},
+                {'box_id': boxes['KX-XZM-01'].id, 'target_stop_sequence': 2},
+                {'box_id': boxes['KX-XZM-02'].id, 'target_stop_sequence': 2},
+                {'box_id': boxes['KX-XYL-01'].id, 'target_stop_sequence': 3}],
         }, dispatcher)
 
         self.stdout.write(

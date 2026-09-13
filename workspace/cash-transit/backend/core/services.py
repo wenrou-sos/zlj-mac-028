@@ -64,16 +64,35 @@ class TaskService:
                                         role_on_task=a['role_on_task'])
 
         # 款箱
+        direction = validated['direction']
+        # 下解只能取在库空闲箱；上收只能取已送达网点、等待回收的箱
+        allow_box_status = (CashBox.Status.IDLE if direction == Task.Direction.OUTBOUND
+                            else CashBox.Status.DELIVERED)
+        require_text = '在库空闲' if direction == Task.Direction.OUTBOUND else '已送达网点待回收'
         stop_by_seq = {s.sequence: s for s in stops}
         for b in validated['boxes']:
             seq = b['target_stop_sequence']
             if seq not in stop_by_seq:
                 raise ValidationError(f'停靠点顺序 {seq} 不存在')
+            stop = stop_by_seq[seq]
             box = CashBox.objects.select_for_update().get(id=b['box_id'])
-            if box.status != CashBox.Status.IDLE:
-                raise ValidationError(f'款箱 {box.box_no} 当前不可用（{box.get_status_display()}）')
+            if box.status != allow_box_status:
+                raise ValidationError(
+                    f'款箱 {box.box_no} 当前为「{box.get_status_display()}」，'
+                    f'{"下解" if direction == Task.Direction.OUTBOUND else "上收"}'
+                    f'任务要求款箱{require_text}')
+            occupied = (TaskBox.objects.filter(box=box)
+                        .exclude(task__status__in=[TaskStatus.COMPLETED,
+                                                   TaskStatus.CANCELLED])
+                        .exists())
+            if occupied:
+                raise ValidationError(f'款箱 {box.box_no} 已被其他未完成任务占用')
+            if box.owner_branch_id != stop.branch_id:
+                raise ValidationError(
+                    f'款箱 {box.box_no} 归属{box.owner_branch.name}，'
+                    f'不能在 {stop.branch.name} 办理交接')
             TaskBox.objects.create(
-                task=task, box=box, target_stop=stop_by_seq[seq],
+                task=task, box=box, target_stop=stop,
                 status=BoxTaskStatus.PENDING_OUT,
             )
 
@@ -133,6 +152,9 @@ class TaskService:
         phase = data['phase']
         stop = tb.target_stop
         now = timezone.now()
+
+        if not data.get('from_user_id') or not data.get('to_user_id'):
+            raise ValidationError('交接必须登记交出人和接收人（双人核对）')
 
         # 阶段与前置校验
         if phase == HandoverPhase.VAULT_OUT:
@@ -358,9 +380,12 @@ class TaskService:
         task.save(update_fields=['status', 'notes', 'updated_at'])
         task.vehicle.status = Vehicle.Status.IDLE
         task.vehicle.save(update_fields=['status'])
-        task.taskbox_set.exclude(status=BoxTaskStatus.PENDING_OUT).update(
-            status=BoxTaskStatus.PENDING_OUT)
-        task.boxes.all().update(status=CashBox.Status.IDLE)
+        # 还原款箱实物状态：下解箱回库空闲，上收箱退回网点已送达
+        restore_status = (CashBox.Status.IDLE if task.direction == Task.Direction.OUTBOUND
+                          else CashBox.Status.DELIVERED)
+        box_ids = list(task.taskbox_set.values_list('box_id', flat=True))
+        task.taskbox_set.update(status=BoxTaskStatus.PENDING_OUT, exception_flag=False)
+        CashBox.objects.filter(id__in=box_ids).update(status=restore_status)
         TaskService._log(task, 'cancelled', f'任务取消：{reason}', actor)
         return task
 
@@ -368,6 +393,8 @@ class TaskService:
     @staticmethod
     @transaction.atomic
     def report_incident(task, data, actor):
+        if task.status in (TaskStatus.COMPLETED, TaskStatus.CANCELLED):
+            raise ValidationError('已办结或已取消的任务不能上报异常')
         inc = Incident.objects.create(
             task=task, stop_id=data.get('stop'), task_box_id=data.get('task_box'),
             category=data['category'], severity=data['severity'],
@@ -399,9 +426,14 @@ class TaskService:
                          stop=inc.stop)
         remain = task.incidents.exclude(status=Incident.Status.RESOLVED).count()
         if remain == 0 and task.status == TaskStatus.ABNORMAL:
-            task.status = TaskStatus.IN_TRANSIT
+            # 未出发恢复「已派车」，已出发恢复「押运中」
+            task.status = (TaskStatus.IN_TRANSIT if task.actual_depart
+                           else TaskStatus.PLANNED)
             task.save(update_fields=['status', 'updated_at'])
-            TaskService._log(task, 'resume', '全部异常已处置，任务恢复押运', actor)
+            TaskService._log(
+                task, 'resume',
+                f'全部异常已处置，任务恢复{"押运" if task.actual_depart else "待出发"}',
+                actor)
         return inc
 
     # ---------- 交接核对表 ----------

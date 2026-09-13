@@ -41,7 +41,7 @@
               <el-icon><Promotion /></el-icon> 出发
             </el-button>
           </template>
-          <template v-if="['in_transit', 'abnormal'].includes(task.status)">
+          <template v-if="['planned', 'in_transit', 'abnormal'].includes(task.status)">
             <el-button type="danger" plain @click="incDialog = true">
               <el-icon><Warning /></el-icon> 上报异常
             </el-button>
@@ -57,7 +57,8 @@
       <el-alert v-if="task.status === 'abnormal'" type="error" show-icon
                 :closable="false" style="margin-top:12px">
         <template #title>
-          任务因异常已挂起，请先在「异常事件」页签处置全部异常后自动恢复押运。
+          任务因异常已挂起，请先在「异常事件」页签处置全部异常；处置后
+          {{ task.actual_depart ? '自动恢复押运' : '恢复为已派车，可重新出发' }}。
           未处置异常 {{ openIncidentCount }} 起。
         </template>
       </el-alert>
@@ -294,6 +295,7 @@
 
     <HandoverDialog v-model="hdVisible" :task-id="task.id" :tb="currentTb"
                     :phase="currentPhase" :stop="currentStop" :staff="staff"
+                    :crew="crewMembers"
                     @saved="reload" />
     <IncidentDialog v-model="incDialog" :task-id="task.id" :stops="task.stops"
                     @saved="reload" />
@@ -338,6 +340,16 @@ const inboundReturnable = computed(() =>
     s.task_boxes.filter((b) => b.status === 'in_transit')))
 const openIncidentCount = computed(() =>
   task.value.incidents.filter((i) => i.status !== 'resolved').length)
+
+const crewMembers = computed(() =>
+  (task.value?.assignees || []).map((a) => ({
+    id: a.user,
+    name: a.user_name,
+    employee_no: a.user_employee_no,
+    position: a.role_on_task === 'car_captain' ? 'car_captain'
+      : a.role_on_task === 'driver' ? 'driver' : 'escort_guard',
+    role: a.role_on_task === 'driver' ? 'driver' : 'guard',
+  })))
 
 async function reload() {
   task.value = await api.get(`/api/tasks/${route.params.id}/`)
