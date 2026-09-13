@@ -348,5 +348,55 @@ code, resp = call('POST', f"/api/tasks/{ztd['id']}/handover/", token, {
 check('休假柜员交接被拦截', code == 400 and '休息' in errmsg(resp), errmsg(resp))
 call('POST', f"/api/staff/{clerk['id']}/return-duty/", token)
 
+# 21. 排班页按日期判定占用：今天在途的车和人，明天应可排班
+import datetime
+today_d = datetime.date.fromisoformat(ztd['planned_date'])
+tomorrow = (today_d + datetime.timedelta(days=1)).isoformat()
+v_today = call('GET', f"/api/vehicles/?date={today_d}&page_size=100", token)[1]
+v_tom = call('GET', f"/api/vehicles/?date={tomorrow}&page_size=100", token)[1]
+busy_car_today = next(v for v in v_today['results'] if v['id'] == ztd['vehicle'])
+busy_car_tom = next(v for v in v_tom['results'] if v['id'] == ztd['vehicle'])
+check('今天在途车辆今日不可排', busy_car_today['schedulable'] is False
+      and ztd['task_no'] in busy_car_today['unavailable_reason'])
+check('今天在途车辆明日可排（跨日期不误判）',
+      busy_car_tom['schedulable'] is True, busy_car_tom['unavailable_reason'])
+s_tom = call('GET', f"/api/staff/?date={tomorrow}&page_size=300", token)[1]
+cap002 = next(a['user'] for a in ztd['assignees']
+              if a['role_on_task'] == 'car_captain')
+cap002_tom = next(u for u in s_tom['results'] if u['id'] == cap002)
+check('今日有任务的车长明日可排', cap002_tom['schedulable'] is True,
+      str(cap002_tom['busy_task_nos']))
+
+# 22. 同车跨日期两个任务：取消明天任务不能把车置为待命（今天仍在途）
+t002_crew = [
+    {'user_id': a['user'], 'role_on_task': a['role_on_task']}
+    for a in ztd['assignees']]
+idle_box_yyc = next(b for b in
+                    call('GET', '/api/boxes/?status=idle&page_size=300', token)[1]['results']
+                    if b['owner_branch_name'] == '亚运村支行'
+                    and b['id'] != idle2['id'])
+tm_task = call('POST', '/api/tasks/', token, {
+    'direction': 'outbound', 'route_id': l04['id'],
+    'vehicle_id': ztd['vehicle'], 'planned_date': tomorrow,
+    'assignees': t002_crew,
+    'boxes': [{'box_id': idle_box_yyc['id'], 'target_stop_sequence': 1}]})[1]
+check('跨日期同车派班成功', tm_task['status'] == 'planned', tm_task.get('detail'))
+# 车辆当前实体状态：今天任务在途 → 执行任务
+car_now = next(v for v in call('GET', '/api/vehicles/', token)[1]['results']
+               if v['id'] == ztd['vehicle'])
+check('车辆实体状态为执行任务', car_now['status'] == 'on_duty', car_now['status'])
+# 取消明天任务
+call('POST', f"/api/tasks/{tm_task['id']}/cancel/", token, {'reason': '明日计划调整'})
+car_now = next(v for v in call('GET', '/api/vehicles/', token)[1]['results']
+               if v['id'] == ztd['vehicle'])
+check('取消明日任务后车辆仍执行今日任务',
+      car_now['status'] == 'on_duty', car_now['status'])
+# 再取消今天的在途任务 → 车辆才应归队待命
+call('POST', f"/api/tasks/{ztd['id']}/cancel/", token, {'reason': '回归测试取消'})
+car_now = next(v for v in call('GET', '/api/vehicles/', token)[1]['results']
+               if v['id'] == ztd['vehicle'])
+check('今日任务也取消后车辆归队待命',
+      car_now['status'] == 'idle', car_now['status'])
+
 print(f"\n==== {sum(1 for _, c, _ in results if c)}/{len(results)} passed ====")
 assert all(c for _, c, _ in results), '存在失败用例'

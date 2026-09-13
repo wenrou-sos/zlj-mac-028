@@ -329,6 +329,27 @@ class TaskService:
                                  f'驶向下一站 {nxt.branch.name}', actor)
 
     @staticmethod
+    def _sync_vehicle_status(vehicle, exclude_task=None):
+        """任务取消/办结后按车上剩余任务同步车辆状态。
+
+        还有在途/挂起任务 → 执行任务；只剩已派车未出发或无任务 → 待命
+        （已派车占用由排班时的 busy_task 查询拦截，不体现在车辆状态上）。
+        """
+        qs = Task.objects.filter(vehicle=vehicle).exclude(
+            status__in=[TaskStatus.COMPLETED, TaskStatus.CANCELLED])
+        if exclude_task:
+            qs = qs.exclude(id=exclude_task.id)
+        new_status = (Vehicle.Status.ON_DUTY
+                      if qs.filter(status__in=[TaskStatus.IN_TRANSIT,
+                                               TaskStatus.ABNORMAL]).exists()
+                      else Vehicle.Status.IDLE)
+        changed = new_status != vehicle.status
+        if changed:
+            vehicle.status = new_status
+            vehicle.save(update_fields=['status'])
+        return new_status, changed
+
+    @staticmethod
     def _maybe_complete(task, actor):
         terminal = BoxTaskStatus.DELIVERED if task.direction == Task.Direction.OUTBOUND \
             else BoxTaskStatus.RETURNED
@@ -339,13 +360,16 @@ class TaskService:
             task.status = TaskStatus.COMPLETED
             task.actual_return = timezone.now()
             task.save(update_fields=['status', 'actual_return', 'updated_at'])
-            task.vehicle.status = Vehicle.Status.IDLE
-            task.vehicle.save(update_fields=['status'])
-            VehicleStatusLog.objects.create(
-                vehicle=task.vehicle, from_status=Vehicle.Status.ON_DUTY,
-                to_status=Vehicle.Status.IDLE,
-                reason=f'任务 {task.task_no} 完成，车辆归队',
-                task=task, operator=actor)
+            new_status, changed = TaskService._sync_vehicle_status(
+                task.vehicle, exclude_task=task)
+            if changed:
+                VehicleStatusLog.objects.create(
+                    vehicle=task.vehicle,
+                    from_status=Vehicle.Status.ON_DUTY,
+                    to_status=new_status,
+                    reason=(f'任务 {task.task_no} 完成，'
+                            f'{"车辆继续执行其他任务" if new_status == Vehicle.Status.ON_DUTY else "车辆归队"}'),
+                    task=task, operator=actor)
             TaskService._log(task, 'completed',
                              '全部交接完成，任务结束，车辆归队', actor)
 
@@ -383,13 +407,16 @@ class TaskService:
         task.status = TaskStatus.COMPLETED
         task.actual_return = timezone.now()
         task.save(update_fields=['status', 'actual_return', 'updated_at'])
-        task.vehicle.status = Vehicle.Status.IDLE
-        task.vehicle.save(update_fields=['status'])
-        VehicleStatusLog.objects.create(
-            vehicle=task.vehicle, from_status=Vehicle.Status.ON_DUTY,
-            to_status=Vehicle.Status.IDLE,
-            reason=f'任务 {task.task_no} 完成，车辆归队',
-            task=task, operator=actor)
+        new_status, changed = TaskService._sync_vehicle_status(
+            task.vehicle, exclude_task=task)
+        if changed:
+            VehicleStatusLog.objects.create(
+                vehicle=task.vehicle,
+                from_status=Vehicle.Status.ON_DUTY,
+                to_status=new_status,
+                reason=(f'任务 {task.task_no} 完成，'
+                        f'{"车辆继续执行其他任务" if new_status == Vehicle.Status.ON_DUTY else "车辆归队"}'),
+                task=task, operator=actor)
         TaskService._log(task, 'completed', '任务完成，车辆归队', actor)
         return task
 
@@ -402,13 +429,14 @@ class TaskService:
         task.notes = (task.notes + f'｜取消原因：{reason}').strip()
         task.save(update_fields=['status', 'notes', 'updated_at'])
         old_vehicle_status = task.vehicle.status
-        task.vehicle.status = Vehicle.Status.IDLE
-        task.vehicle.save(update_fields=['status'])
-        if old_vehicle_status == Vehicle.Status.ON_DUTY:
+        new_status, changed = TaskService._sync_vehicle_status(
+            task.vehicle, exclude_task=task)
+        if changed and old_vehicle_status == Vehicle.Status.ON_DUTY:
             VehicleStatusLog.objects.create(
                 vehicle=task.vehicle, from_status=old_vehicle_status,
-                to_status=Vehicle.Status.IDLE,
-                reason=f'任务 {task.task_no} 取消，车辆归队',
+                to_status=new_status,
+                reason=(f'任务 {task.task_no} 取消，'
+                        f'{"车辆继续执行其他任务" if new_status == Vehicle.Status.ON_DUTY else "车辆归队"}'),
                 task=task, operator=actor)
         restore_status = (CashBox.Status.IDLE if task.direction == Task.Direction.OUTBOUND
                           else CashBox.Status.DELIVERED)

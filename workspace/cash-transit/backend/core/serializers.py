@@ -36,15 +36,20 @@ class VehicleSerializer(serializers.ModelSerializer):
                   'status_display', 'home_branch', 'home_branch_name', 'note',
                   'busy_task_no', 'schedulable', 'unavailable_reason']
 
+    def _on_date(self):
+        request = self.context.get('request')
+        return request.query_params.get('date') if request else None
+
     def get_busy_task_no(self, obj):
-        busy = ResourceService.vehicle_busy_task(obj)
+        busy = ResourceService.vehicle_busy_task(obj, self._on_date())
         return busy.task_no if busy else None
 
     def get_schedulable(self, obj):
-        return ResourceService.vehicle_unavailable_reason(obj) is None
+        return ResourceService.vehicle_unavailable_reason(
+            obj, self._on_date()) is None
 
     def get_unavailable_reason(self, obj):
-        return ResourceService.vehicle_unavailable_reason(obj)
+        return ResourceService.vehicle_unavailable_reason(obj, self._on_date())
 
 
 class CashBoxSerializer(serializers.ModelSerializer):
@@ -110,14 +115,20 @@ class StaffBriefSerializer(serializers.ModelSerializer):
                   'branch_name', 'active_duty', 'leave_type', 'duty_display',
                   'busy_task_nos', 'schedulable']
 
+    def _on_date(self):
+        request = self.context.get('request')
+        return request.query_params.get('date') if request else None
+
     def get_busy_task_nos(self, obj):
-        from .resource_service import ResourceService
-        return [t.task_no for t in ResourceService.user_busy_tasks(obj)][:5]
+        tasks = ResourceService.user_busy_tasks(obj)
+        on_date = self._on_date()
+        if on_date:
+            tasks = [t for t in tasks if str(t.planned_date) == on_date]
+        return [t.task_no for t in tasks][:5]
 
     def get_schedulable(self, obj):
-        from .resource_service import ResourceService
-        return (obj.is_active and obj.active_duty
-                and not ResourceService.user_busy_tasks(obj))
+        return ResourceService.user_unavailable_reason(
+            obj, self._on_date()) is None
 
 
 # ---------- 交接 / 异常 / 日志 ----------

@@ -234,6 +234,26 @@ watch(() => form.direction, () => {
   chosenBoxes.value = []
 })
 
+// 车辆/人员占用按所选日期判定；日期变化后重拉并清掉当日不可用的已选
+watch(() => form.planned_date, async (d, old) => {
+  if (!d || d === old) return
+  await loadResources()
+  if (form.vehicle_id) {
+    const v = vehicles.value.find((x) => x.id === form.vehicle_id)
+    if (!v || !isVehicleOk(v)) {
+      form.vehicle_id = null
+      ElMessage.info('日期变更，原选车辆当日不可用，已清空')
+    }
+  }
+  for (const key of Object.keys(crewAssign)) {
+    const s = staff.value.find((x) => x.id === crewAssign[key])
+    if (!s || !isStaffOk(s)) {
+      crewAssign[key] = null
+      ElMessage.info(`日期变更，${s?.name || '原选人员'}当日不可用，已清空`)
+    }
+  }
+})
+
 const crewSlots = ref([
   { key: 'car_captain', label: '车长', type: 'danger', removable: false },
   { key: 'guard_0', label: '押运员', type: 'warning', removable: false },
@@ -344,20 +364,30 @@ async function submit() {
   }
 }
 
+async function loadResources() {
+  // 车辆、人员的占用情况必须按排班日期判定（明天有任务不影响今天排班）
+  const [vs, ss] = await Promise.all([
+    api.get('/api/vehicles/', {
+      params: { page_size: 100, date: form.planned_date || undefined },
+    }),
+    api.get('/api/staff/', {
+      params: { page_size: 200, date: form.planned_date || undefined },
+    }),
+  ])
+  vehicles.value = vs.results
+  staff.value = ss.results.filter((u) => ['guard', 'driver'].includes(u.role))
+}
+
 onMounted(async () => {
-  const [rs, vs, ss, idleResp, deliveredResp] = await Promise.all([
+  const [rs, idleResp, deliveredResp] = await Promise.all([
     api.get('/api/routes/', { params: { page_size: 100, active: true } }),
-    api.get('/api/vehicles/', { params: { page_size: 100 } }),
-    api.get('/api/staff/', { params: { page_size: 200 } }),
     api.get('/api/boxes/', { params: { page_size: 300, status: 'idle' } }),
     api.get('/api/boxes/', { params: { page_size: 300, status: 'delivered' } }),
   ])
   routes.value = rs.results
-  vehicles.value = vs.results
-  staff.value = ss.results.filter((u) =>
-    ['guard', 'driver'].includes(u.role))
   idleBoxes.value = idleResp.results
   deliveredBoxes.value = deliveredResp.results
+  await loadResources()
   if (route.query.route) {
     form.route_id = Number(route.query.route)
     onRouteChange()
