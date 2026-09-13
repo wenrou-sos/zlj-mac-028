@@ -1,0 +1,11 @@
+venv/
+node_modules/
+frontend/dist/
+pgdata/
+pgsql/local/
+pgsql/debs/
+pgsql/pg.log
+__pycache__/
+*.pyc
+backend/staticfiles/
+db.sqlite3

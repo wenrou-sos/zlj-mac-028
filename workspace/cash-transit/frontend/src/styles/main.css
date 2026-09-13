@@ -1,0 +1,75 @@
+:root {
+  --brand: #1d4e89;
+  --brand-dark: #143a68;
+  --brand-light: #e8f1fb;
+  --el-color-primary: #1d4e89;
+  --el-color-primary-light-3: #5a83b3;
+  --el-color-primary-light-5: #8faacc;
+  --el-color-primary-light-7: #c2d4e6;
+  --el-color-primary-light-8: #d7e3f0;
+  --el-color-primary-light-9: #e8f1fb;
+  --el-color-primary-dark-2: #173e6e;
+  --el-border-radius-base: 4px;
+}
+
+html, body, #app {
+  height: 100%;
+  margin: 0;
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  background: #f0f2f5;
+}
+
+.page-container {
+  padding: 16px;
+}
+
+.page-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f2d3d;
+  margin: 0 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-title::before {
+  content: '';
+  width: 4px;
+  height: 18px;
+  background: var(--brand);
+  border-radius: 2px;
+}
+
+.card-header {
+  font-weight: 600;
+  color: #303133;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.stat-card {
+  color: #fff;
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+}
+
+.stat-card .el-card__body {
+  padding: 18px 20px;
+}
+
+.mono {
+  font-family: 'SFMono-Regular', Consolas, 'Courier New', monospace;
+}
+
+.stop-line {
+  border-left: 2px dashed #c0c4cc;
+  margin-left: 7px;
+}
+
+.handover-ok { color: #67c23a; }
+.handover-bad { color: #f56c6c; }
+
+.el-table .cell { line-height: 1.5; }

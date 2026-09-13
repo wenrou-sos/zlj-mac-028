@@ -1,0 +1,231 @@
+from rest_framework import filters, status, viewsets
+from rest_framework.decorators import action
+from rest_framework.response import Response
+
+from accounts.models import User
+
+from .models import (Branch, CashBox, Handover, Incident, Route, RouteStop,
+                     Task, TaskAssignee, TaskBox, TaskLog, TaskStop, Vehicle)
+from .serializers import (ArriveStopSerializer, BranchSerializer,
+                          CashBoxSerializer, HandoverActionSerializer,
+                          HandoverSerializer, IncidentCreateSerializer,
+                          IncidentSerializer, RouteListSerializer,
+                          RouteSerializer, StaffBriefSerializer,
+                          TaskCreateSerializer, TaskDetailSerializer,
+                          TaskListSerializer, VehicleSerializer)
+from .services import TaskService
+
+
+class BranchViewSet(viewsets.ModelViewSet):
+    queryset = Branch.objects.all()
+    serializer_class = BranchSerializer
+    filterset_fields = ['branch_type', 'active']
+
+    @action(detail=False)
+    def vaults(self, request):
+        qs = self.queryset.filter(
+            branch_type__in=['head_vault', 'sub_vault'], active=True)
+        return Response(BranchSerializer(qs, many=True).data)
+
+
+class VehicleViewSet(viewsets.ModelViewSet):
+    queryset = Vehicle.objects.select_related('home_branch').all()
+    serializer_class = VehicleSerializer
+    filterset_fields = ['status']
+
+
+class CashBoxViewSet(viewsets.ModelViewSet):
+    queryset = CashBox.objects.select_related('owner_branch').all()
+    serializer_class = CashBoxSerializer
+    filterset_fields = ['status', 'box_type', 'owner_branch']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        status_ = self.request.query_params.get('available')
+        if status_ == '1':
+            qs = qs.filter(status=CashBox.Status.IDLE)
+        return qs
+
+
+class RouteViewSet(viewsets.ModelViewSet):
+    queryset = Route.objects.select_related('depot').prefetch_related('stops').all()
+    filterset_fields = ['active']
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return RouteListSerializer
+        return RouteSerializer
+
+
+class StaffViewSet(viewsets.ReadOnlyModelViewSet):
+    """可排班组人员（车长/押运员/驾驶员）。"""
+    serializer_class = StaffBriefSerializer
+
+    def get_queryset(self):
+        qs = User.objects.filter(is_active=True)
+        role = self.request.query_params.get('role')
+        if role:
+            qs = qs.filter(role=role)
+        return qs.order_by('employee_no')
+
+
+class TaskViewSet(viewsets.ModelViewSet):
+    queryset = (Task.objects.select_related('route', 'vehicle', 'depot', 'creator')
+                .prefetch_related('taskassignee_set__user').all())
+
+    def get_serializer_class(self):
+        if self.action in ('create', 'update', 'partial_update'):
+            return TaskCreateSerializer
+        if self.action == 'list':
+            return TaskListSerializer
+        return TaskDetailSerializer
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        params = self.request.query_params
+        if params.get('status'):
+            qs = qs.filter(status=params['status'])
+        if params.get('direction'):
+            qs = qs.filter(direction=params['direction'])
+        if params.get('date'):
+            qs = qs.filter(planned_date=params['date'])
+        if params.get('vehicle'):
+            qs = qs.filter(vehicle_id=params['vehicle'])
+        if params.get('keyword'):
+            qs = qs.filter(task_no__icontains=params['keyword'])
+        return qs
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        task = TaskService.create_task(serializer.validated_data, request.user)
+        return Response(TaskDetailSerializer(task).data,
+                        status=status.HTTP_201_CREATED)
+
+    def update(self, request, *args, **kwargs):
+        return Response({'detail': '任务创建后请使用流转操作，不支持整体修改'},
+                        status=status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    # ---- 仪表盘 ----
+    @action(detail=False)
+    def dashboard(self, request):
+        from django.db.models import Count
+        qs = Task.objects.all()
+        by_status = {row['status']: row['n'] for row in
+                     qs.values('status').annotate(n=Count('id'))}
+        today = self.request.query_params.get('date')
+        from django.utils import timezone
+        today = today or timezone.localdate().isoformat()
+        today_qs = qs.filter(planned_date=today)
+        open_inc = Incident.objects.exclude(status=Incident.Status.RESOLVED).count()
+        recent = TaskListSerializer(
+            qs.select_related('route', 'vehicle')[:8], many=True)
+        return Response({
+            'by_status': by_status,
+            'today_total': today_qs.count(),
+            'today_in_transit': today_qs.filter(
+                status__in=['in_transit', 'abnormal']).count(),
+            'vehicles_on_duty': Vehicle.objects.filter(
+                status=Vehicle.Status.ON_DUTY).count(),
+            'open_incidents': open_inc,
+            'recent': recent.data,
+        })
+
+    # ---- 流转动作 ----
+    @action(detail=True, methods=['post'])
+    def depart(self, request, pk=None):
+        task = self.get_object()
+        TaskService.depart(task, request.user)
+        return Response(TaskDetailSerializer(task).data)
+
+    @action(detail=True, methods=['post'], url_path='arrive')
+    def arrive(self, request, pk=None):
+        task = self.get_object()
+        ser = ArriveStopSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        TaskService.arrive_stop(task, ser.validated_data['stop_id'], request.user)
+        return Response(TaskDetailSerializer(task).data)
+
+    @action(detail=True, methods=['post'], url_path='handover')
+    def handover(self, request, pk=None):
+        task = self.get_object()
+        ser = HandoverActionSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        h = TaskService.handover(task, ser.validated_data, request.user)
+        task.refresh_from_db()
+        return Response({
+            'handover': HandoverSerializer(h).data,
+            'task': TaskDetailSerializer(task).data,
+        })
+
+    @action(detail=True, methods=['post'], url_path='finish-stop')
+    def finish_stop(self, request, pk=None):
+        task = self.get_object()
+        ser = ArriveStopSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        TaskService.finish_stop(task, ser.validated_data['stop_id'], request.user)
+        return Response(TaskDetailSerializer(task).data)
+
+    @action(detail=True, methods=['post'])
+    def complete(self, request, pk=None):
+        task = self.get_object()
+        TaskService.complete(task, request.user)
+        return Response(TaskDetailSerializer(task).data)
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        task = self.get_object()
+        TaskService.cancel(task, request.user,
+                           request.data.get('reason', ''))
+        return Response(TaskDetailSerializer(task).data)
+
+    # ---- 异常 ----
+    @action(detail=True, methods=['get', 'post'], url_path='incidents')
+    def incidents(self, request, pk=None):
+        task = self.get_object()
+        if request.method == 'POST':
+            ser = IncidentCreateSerializer(data=request.data)
+            ser.is_valid(raise_exception=True)
+            inc = TaskService.report_incident(task, ser.validated_data, request.user)
+            task.refresh_from_db()
+            return Response(IncidentSerializer(inc).data,
+                            status=status.HTTP_201_CREATED)
+        return Response(IncidentSerializer(task.incidents.all(), many=True).data)
+
+    @action(detail=True, methods=['post'], url_path='incidents/(?P<incident_id>[0-9]+)/resolve')
+    def resolve_incident(self, request, pk=None, incident_id=None):
+        task = self.get_object()
+        resolution = (request.data.get('resolution') or '').strip()
+        if not resolution:
+            return Response({'detail': '请填写处置说明'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        TaskService.resolve_incident(task, incident_id, request.user, resolution)
+        return Response(TaskDetailSerializer(task).data)
+
+    # ---- 交接核对表 ----
+    @action(detail=True, methods=['get'])
+    def reconcile(self, request, pk=None):
+        task = self.get_object()
+        return Response(TaskService.reconcile(task))
+
+    # ---- 全程日志 ----
+    @action(detail=True)
+    def timeline(self, request, pk=None):
+        task = self.get_object()
+        logs = task.logs.select_related('actor', 'stop').all()[:100]
+        from .serializers import TaskLogSerializer
+        return Response(TaskLogSerializer(logs, many=True).data)
+
+
+class IncidentViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = (Incident.objects.select_related('task', 'reported_by', 'task_box__box')
+                .all())
+    serializer_class = IncidentSerializer
+    filterset_fields = ['status', 'category', 'severity']
+
+
+class HandoverViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = (Handover.objects.select_related('task_box__box', 'from_person',
+                                                'to_person', 'operator').all())
+    serializer_class = HandoverSerializer
+    filterset_fields = ['phase', 'result']
