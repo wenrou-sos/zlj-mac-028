@@ -1,7 +1,8 @@
 from django.contrib import admin
 
-from .models import (Branch, CashBox, Handover, Incident, Route, RouteStop,
-                     Task, TaskAssignee, TaskBox, TaskLog, TaskStop, Vehicle)
+from .models import (Branch, CashBox, Handover, Incident, PersonnelStatusLog,
+                     Route, RouteStop, Task, TaskAssignee, TaskBox, TaskLog,
+                     TaskStop, Vehicle, VehicleStatusLog)
 
 
 @admin.register(Branch)
@@ -75,3 +76,19 @@ class IncidentAdmin(admin.ModelAdmin):
 class TaskLogAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'task', 'event', 'message', 'actor')
     list_filter = ('event',)
+
+
+@admin.register(VehicleStatusLog)
+class VehicleStatusLogAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'vehicle', 'from_status', 'to_status',
+                    'reason', 'operator')
+    list_filter = ('to_status',)
+    search_fields = ('vehicle__plate',)
+
+
+@admin.register(PersonnelStatusLog)
+class PersonnelStatusLogAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'user', 'active_duty', 'leave_type',
+                    'reason', 'operator')
+    list_filter = ('active_duty', 'leave_type')
+    search_fields = ('user__name', 'user__employee_no')

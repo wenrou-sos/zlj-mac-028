@@ -110,20 +110,23 @@ const sealPlaceholder = computed(() => {
 
 const fromOptions = computed(() => {
   if (props.phase === 'vault_out')
-    return props.staff.filter((u) => u.role === 'vault_keeper')
+    return props.staff.filter((u) => u.role === 'vault_keeper'
+      && u.active_duty !== false)
   // 车上交接由车长交出
   return props.crew.filter((u) => u.position === 'car_captain')
 })
 const toOptions = computed(() => {
   if (props.phase === 'branch_recv' || props.phase === 'branch_pickup') {
     const bid = props.stop?.branch
-    const clerks = props.staff.filter((u) => u.role === 'branch_clerk' &&
-      (!bid || !u.branch || u.branch === bid))
-    return clerks.length ? clerks
-      : props.staff.filter((u) => u.role === 'branch_clerk')
+    const onDutyClerks = props.staff.filter(
+      (u) => u.role === 'branch_clerk' && u.active_duty !== false)
+    const clerks = onDutyClerks.filter(
+      (u) => !bid || !u.branch || u.branch === bid)
+    return clerks.length ? clerks : onDutyClerks
   }
   if (props.phase === 'vault_return')
-    return props.staff.filter((u) => u.role === 'vault_keeper')
+    return props.staff.filter((u) => u.role === 'vault_keeper'
+      && u.active_duty !== false)
   // 出库接收 = 车长
   return props.crew.filter((u) => u.position === 'car_captain')
 })

@@ -320,3 +320,51 @@ class TaskLog(models.Model):
 
     def __str__(self):
         return f'[{self.created_at:%H:%M:%S}] {self.message}'
+
+
+class VehicleStatusLog(models.Model):
+    """车辆状态变更留痕（送修 / 复归待命 / 派车占用）。"""
+
+    vehicle = models.ForeignKey('Vehicle', verbose_name='车辆',
+                                on_delete=models.CASCADE, related_name='status_logs')
+    from_status = models.CharField('原状态', max_length=20, blank=True, default='')
+    to_status = models.CharField('新状态', max_length=20,
+                                 choices=Vehicle.Status.choices)
+    reason = models.CharField('事由', max_length=200, blank=True, default='')
+    task = models.ForeignKey(Task, verbose_name='关联任务',
+                             on_delete=models.SET_NULL, null=True, blank=True)
+    operator = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name='操作人',
+                                 on_delete=models.SET_NULL, null=True,
+                                 related_name='vehicle_status_logs')
+    created_at = models.DateTimeField('时间', auto_now_add=True)
+
+    class Meta:
+        verbose_name = '车辆状态变更记录'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.vehicle_id} {self.from_status}→{self.to_status}'
+
+
+class PersonnelStatusLog(models.Model):
+    """人员在岗状态变更留痕（请假 / 复岗）。"""
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name='人员',
+                             on_delete=models.CASCADE, related_name='duty_logs')
+    active_duty = models.BooleanField('变更后在岗')
+    leave_type = models.CharField('缺勤类型', max_length=20, blank=True,
+                                  default='')
+    reason = models.CharField('事由', max_length=200, blank=True, default='')
+    task = models.ForeignKey(Task, verbose_name='关联任务',
+                             on_delete=models.SET_NULL, null=True, blank=True)
+    operator = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name='操作人',
+                                 on_delete=models.SET_NULL, null=True,
+                                 related_name='personnel_status_logs')
+    created_at = models.DateTimeField('时间', auto_now_add=True)
+
+    class Meta:
+        verbose_name = '人员状态变更记录'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.user_id} {"在岗" if self.active_duty else "缺勤"}'

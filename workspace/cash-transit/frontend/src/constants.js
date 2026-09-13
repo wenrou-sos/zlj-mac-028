@@ -66,3 +66,10 @@ export const VEHICLE_STATUS = {
   on_duty: { label: '执行任务', type: 'warning' },
   maintenance: { label: '维修中', type: 'info' },
 }
+
+export const LEAVE_TYPE = {
+  vacation: '休假',
+  training: '培训',
+  rest: '休息',
+  other: '其他',
+}

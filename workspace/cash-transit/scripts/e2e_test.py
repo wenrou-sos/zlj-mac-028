@@ -198,6 +198,18 @@ check('车辆当天冲突被拦截', code == 400, errmsg(resp))
 _, zgc_task = call('GET', '/api/tasks/?status=in_transit', token)
 zt = next(t for t in zgc_task['results'] if t['task_no'].endswith('002'))
 _, ztd = call('GET', f"/api/tasks/{zt['id']}/", token)
+# 预先算出当前完全空闲的车组，后续多个用例复用
+_, staff_all = call('GET', '/api/staff/?page_size=300', token)
+used_user_ids = set()
+for t in call('GET', '/api/tasks/?page_size=50', token)[1]['results']:
+    _, tdx = call('GET', f"/api/tasks/{t['id']}/", token)
+    if tdx['status'] not in ('completed', 'cancelled'):
+        used_user_ids.update(a['user'] for a in tdx['assignees'])
+free_staff = [u for u in staff_all['results']
+              if u['id'] not in used_user_ids and u['active_duty']]
+free_captain = next(u['id'] for u in free_staff if u['position'] == 'car_captain')
+free_guard = next(u['id'] for u in free_staff if u['position'] == 'escort_guard')
+free_driver = next(u['id'] for u in free_staff if u['role'] == 'driver')
 code, resp = call('POST', '/api/tasks/', token, {
     'direction': 'outbound', 'route_id': ztd['route'],
     'vehicle_id': next(v['id'] for v in
@@ -205,20 +217,15 @@ code, resp = call('POST', '/api/tasks/', token, {
                        if v['status'] == 'idle'),
     'planned_date': ztd['planned_date'],
     'assignees': [
-        {'user_id': next(a['user'] for a in ztd['assignees']
-                         if a['role_on_task'] == 'car_captain'),
-         'role_on_task': 'car_captain'},
-        {'user_id': next(a['user'] for a in ztd['assignees']
-                         if a['role_on_task'] == 'guard'),
-         'role_on_task': 'guard'},
-        {'user_id': next(a['user'] for a in ztd['assignees']
-                         if a['role_on_task'] == 'driver'),
-         'role_on_task': 'driver'}],
+        {'user_id': free_captain, 'role_on_task': 'car_captain'},
+        {'user_id': free_guard, 'role_on_task': 'guard'},
+        {'user_id': free_driver, 'role_on_task': 'driver'}],
     'boxes': [{'box_id': next(b['id'] for b in
                               call('GET', '/api/boxes/', token)[1]['results']
                               if b['box_no'] == 'KX-ZGC-02'),
                'target_stop_sequence': 1}]})
-check('占用款箱重复排班被拦截', code == 400, errmsg(resp))
+check('占用款箱重复排班被拦截', code == 400 and 'KX-ZGC-02' in errmsg(resp),
+      errmsg(resp))
 
 # 13. 交接缺少交出/接收人应被拒绝（任务002中关村站有待核对款箱）
 _, at = call('GET', '/api/tasks/?status=in_transit', token)
@@ -251,15 +258,9 @@ new_task = call('POST', '/api/tasks/', token, {
     'direction': 'outbound', 'route_id': l04['id'], 'vehicle_id': v_idle,
     'planned_date': atd['planned_date'],
     'assignees': [
-        {'user_id': next(a['user'] for a in ztd['assignees']
-                         if a['role_on_task'] == 'car_captain'),
-         'role_on_task': 'car_captain'},
-        {'user_id': next(a['user'] for a in ztd['assignees']
-                         if a['role_on_task'] == 'guard'),
-         'role_on_task': 'guard'},
-        {'user_id': next(a['user'] for a in ztd['assignees']
-                         if a['role_on_task'] == 'driver'),
-         'role_on_task': 'driver'}],
+        {'user_id': free_captain, 'role_on_task': 'car_captain'},
+        {'user_id': free_guard, 'role_on_task': 'guard'},
+        {'user_id': free_driver, 'role_on_task': 'driver'}],
     'boxes': [{'box_id': idle2['id'], 'target_stop_sequence': 1}]})[1]
 check('新任务为已派车', new_task['status'] == 'planned', new_task['status'])
 inc_new = call('POST', f"/api/tasks/{new_task['id']}/incidents/", token, {
@@ -272,6 +273,80 @@ code, _ = call('POST',
                token, {'resolution': '更换车辆后恢复排班'})
 _, nd = call('GET', f"/api/tasks/{new_task['id']}/", token)
 check('处置后恢复已派车（非押运中）', nd['status'] == 'planned', nd['status'])
+
+# 16. 车辆送修 / 复归待命 + 留痕（选无任务占用的待命车）
+_, vlist = call('GET', '/api/vehicles/?page_size=100', token)
+idle_v = next(v for v in vlist['results']
+              if v['status'] == 'idle' and not v['busy_task_no'])
+code, resp = call('POST', f"/api/vehicles/{idle_v['id']}/repair/", token,
+                  {'reason': '刹车异响送修'})
+check('车辆送修成功', code == 200 and resp['vehicle']['status'] == 'maintenance')
+code, resp = call('POST', f"/api/vehicles/{idle_v['id']}/repair/", token,
+                  {'reason': '重复送修'})
+check('维修车重复送修被拦截', code == 400, errmsg(resp))
+code, logs = call('GET', f"/api/vehicles/{idle_v['id']}/status-logs/", token)
+check('车辆变更留痕', code == 200 and logs[0]['reason'] == '刹车异响送修'
+      and logs[0]['operator_name'] == '张建国')
+code, resp = call('POST', f"/api/vehicles/{idle_v['id']}/return-service/", token)
+check('车辆复归待命', code == 200 and resp['vehicle']['status'] == 'idle')
+
+# 17. 执行中任务占用的车辆不能送修
+_, in_t = call('GET', '/api/tasks/?status=in_transit', token)
+busy_v = next(t for t in in_t['results'] if t['task_no'].endswith('002'))
+on_duty_vid = busy_v['vehicle']
+code, resp = call('POST', f"/api/vehicles/{on_duty_vid}/repair/", token,
+                  {'reason': '强行送修'})
+check('任务占用车辆禁止送修', code == 400 and '任务' in errmsg(resp), errmsg(resp))
+
+# 18. 人员请假 / 复岗 + 被任务占用拦截
+# 实时挑一个无未完成任务、在岗的押运员
+_, stf = call('GET', '/api/staff/?page_size=300', token)
+cur_busy = set()
+for t in call('GET', '/api/tasks/?page_size=50', token)[1]['results']:
+    _, tdx = call('GET', f"/api/tasks/{t['id']}/", token)
+    if tdx['status'] not in ('completed', 'cancelled'):
+        cur_busy.update(a['user'] for a in tdx['assignees'])
+free_guard_u = next(u for u in stf['results']
+                    if u['position'] == 'escort_guard'
+                    and u['id'] not in cur_busy and u['active_duty'])
+code, resp = call('POST', f"/api/staff/{free_guard_u['id']}/leave/", token,
+                  {'leave_type': 'vacation', 'reason': '年假两天'})
+check('押运员请假成功', code == 200 and resp['staff']['active_duty'] is False
+      and resp['staff']['duty_display'] == '休假')
+code, logs = call('GET', f"/api/staff/{free_guard_u['id']}/duty-logs/", token)
+check('人员变更留痕', logs[0]['reason'] == '年假两天'
+      and logs[0]['operator_name'] == '张建国')
+# 休假人员在排班候选中被标记为不可用（前端据此禁用），复岗
+_, stf2 = call('GET', '/api/staff/?page_size=300', token)
+off = next(u for u in stf2['results'] if u['id'] == free_guard_u['id'])
+check('休假押运员标记为不可排班', off['schedulable'] is False
+      and off['duty_display'] == '休假')
+code, _ = call('POST', f"/api/staff/{free_guard_u['id']}/return-duty/", token)
+check('押运员复岗成功', code == 200)
+
+# 19. 被任务占用的人员不能请假
+busy_guard_id = next(a['user'] for a in ztd['assignees']
+                     if a['role_on_task'] == 'guard')
+code, resp = call('POST', f"/api/staff/{busy_guard_id}/leave/", token,
+                  {'leave_type': 'training', 'reason': '强行请假'})
+check('任务占用人员禁止请假', code == 400 and '任务' in errmsg(resp), errmsg(resp))
+
+# 20. 休假柜员不能办理交接：让柜员临时休假，交接应被拒
+clerk_han = next(u for u in stf['results'] if u['name'] == '韩雪')
+# 韩雪所在任务003正挂起，先确认她无其他在办占用（任务挂起也算占用，改选蒋帆）
+clerk = next(u for u in stf['results'] if u['name'] == '蒋帆')
+call('POST', f"/api/staff/{clerk['id']}/leave/", token,
+     {'leave_type': 'rest', 'reason': '临时调休'})
+arrived = next(s for s in ztd['stops'] if s['status'] == 'arrived')
+tb_pending = next(b for b in arrived['task_boxes']
+                  if b['status'] == 'in_transit')
+code, resp = call('POST', f"/api/tasks/{ztd['id']}/handover/", token, {
+    'task_box_id': tb_pending['id'], 'phase': 'branch_recv',
+    'stop_id': arrived['id'], 'seal_no_in': 'FJ1002',
+    'code': arrived['verify_code'],
+    'from_user_id': free_captain, 'to_user_id': clerk['id']})
+check('休假柜员交接被拦截', code == 400 and '休息' in errmsg(resp), errmsg(resp))
+call('POST', f"/api/staff/{clerk['id']}/return-duty/", token)
 
 print(f"\n==== {sum(1 for _, c, _ in results if c)}/{len(results)} passed ====")
 assert all(c for _, c, _ in results), '存在失败用例'

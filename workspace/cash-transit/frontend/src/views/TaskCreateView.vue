@@ -40,11 +40,14 @@
                   <el-select v-model="form.vehicle_id" filterable placeholder="选择车辆"
                              style="width:100%">
                     <el-option v-for="v in vehicles" :key="v.id" :value="v.id"
-                               :disabled="v.status !== 'idle'"
-                               :label="`${v.plate} ${v.model}`">
+                               :disabled="!isVehicleOk(v)"
+                               :label="vehicleLabel(v)">
                       <span>{{ v.plate }} {{ v.model }}</span>
-                      <span style="float:right;color:#909399;font-size:12px">
-                        {{ v.status_display }} · {{ v.capacity }}箱
+                      <span style="float:right;font-size:12px"
+                            :style="isVehicleOk(v) ? 'color:#909399' : 'color:#f56c6c'">
+                        {{ isVehicleOk(v)
+                          ? `${v.status_display} · ${v.capacity}箱`
+                          : vehicleReason(v) }}
                       </span>
                     </el-option>
                   </el-select>
@@ -84,8 +87,13 @@
             <el-select v-model="crewAssign[role.key]" filterable
                        :placeholder="`选择${role.label}`" style="flex:1">
               <el-option v-for="s in staff" :key="s.id" :value="s.id"
-                         :label="`${s.name}（${s.employee_no}）${s.phone}`"
-                         :disabled="isPicked(s.id, role.key)" />
+                         :disabled="isPicked(s.id, role.key) || !isStaffOk(s)"
+                         :label="`${s.name}（${s.employee_no}）${s.phone}`">
+                <span :class="{ 'dim-option': !isStaffOk(s) }">
+                  {{ s.name }}（{{ s.employee_no }}）
+                  {{ isStaffOk(s) ? s.phone : '｜' + staffReason(s) }}
+                </span>
+              </el-option>
             </el-select>
             <el-button text type="danger" v-if="role.removable"
                        @click="removeSlot(idx)"><el-icon><Delete /></el-icon></el-button>
@@ -243,6 +251,30 @@ const totalAmount = computed(() =>
 function isPicked(id, currentKey) {
   return Object.entries(crewAssign).some(([k, v]) => k !== currentKey && v === id)
 }
+
+// 车辆可用性：维修 / 有未完成任务占用均不可选
+function isVehicleOk(v) {
+  return v.status !== 'maintenance' && !v.busy_task_no
+}
+function vehicleReason(v) {
+  if (v.status === 'maintenance') return '维修中'
+  if (v.busy_task_no) return `任务 ${v.busy_task_no} 占用`
+  if (v.status === 'on_duty') return '执行任务中'
+  return ''
+}
+function vehicleLabel(v) {
+  return `${v.plate} ${isVehicleOk(v) ? '' : '（' + vehicleReason(v) + '）'}`
+}
+
+// 人员可用性：缺勤（休假/培训/休息）/ 被未完成任务占用不可选
+function isStaffOk(s) {
+  return s.schedulable !== false && !(s.busy_task_nos && s.busy_task_nos.length)
+}
+function staffReason(s) {
+  if (!s.active_duty) return s.duty_display || '缺勤'
+  if (s.busy_task_nos?.length) return `被任务 ${s.busy_task_nos[0]} 占用`
+  return ''
+}
 function addGuardSlot() {
   crewSlots.value.splice(crewSlots.value.length - 1, 0,
     { key: `guard_${guardN}`, label: '押运员', type: 'warning', removable: true })
@@ -337,4 +369,5 @@ onMounted(async () => {
 .crew-row { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
 .sticky-card { position: sticky; top: 8px; }
 .mono { font-family: monospace; }
+.dim-option { color: #f56c6c; }
 </style>

@@ -73,10 +73,13 @@ STAFF = [
     ('2004', '赵磊', 'guard', 'car_captain', '13800002004', 'JK002'),
     ('2005', '孙鹏', 'guard', 'escort_guard', '13800002005', 'JK002'),
     ('2006', '周勇', 'guard', 'escort_guard', '13800002006', 'JK002'),
+    ('2007', '徐刚', 'guard', 'car_captain', '13800002007', 'JK001'),
+    ('2008', '马骏', 'guard', 'escort_guard', '13800002008', 'JK002'),
     ('3001', '吴铁军', 'driver', 'driver', '13800003001', 'JK001'),
     ('3002', '郑凯', 'driver', 'driver', '13800003002', 'JK001'),
     ('3003', '钱进宝', 'driver', 'driver', '13800003003', 'JK001'),
     ('3004', '冯远征', 'driver', 'driver', '13800003004', 'JK002'),
+    ('3005', '卫国民', 'driver', 'driver', '13800003005', 'JK002'),
     ('4001', '周金库', 'vault_keeper', 'vault_keeper', '13800004001', 'JK001'),
     ('4002', '吴库管', 'vault_keeper', 'vault_keeper', '13800004002', 'JK002'),
     ('5001', '郑晓敏', 'branch_clerk', 'clerk', '13900005001', 'WD001'),
@@ -152,6 +155,7 @@ class Command(BaseCommand):
         boxes = self._seed_boxes(branches)
         routes = self._seed_routes(branches)
         self._seed_admin(users)
+        self._seed_resource_status(branches, users)
         self._seed_tasks(routes, boxes, users)
 
         self.stdout.write(self.style.SUCCESS('\n样例数据初始化完成！'))
@@ -227,6 +231,28 @@ class Command(BaseCommand):
                 employee_no='9001', name='管理员',
                 role=Role.ADMIN, position='', phone='13800009001')
 
+    def _seed_resource_status(self, branches, users):
+        """维修车与培训押运员的初始状态及历史留痕（仅全新数据时）。"""
+        from core.models import PersonnelStatusLog, Vehicle, VehicleStatusLog
+
+        repair_car = Vehicle.objects.filter(plate='京A·Y8005').first()
+        admin = users['1001']
+        if repair_car and not repair_car.status_logs.exists():
+            VehicleStatusLog.objects.create(
+                vehicle=repair_car, from_status='idle', to_status='maintenance',
+                reason='例行防弹钢板检修 + GPS 模块更换，预计两日',
+                operator=admin)
+
+        trainee = users.get('2006')
+        if trainee and not trainee.duty_logs.exists():
+            trainee.active_duty = False
+            trainee.leave_type = 'training'
+            trainee.save(update_fields=['active_duty', 'leave_type'])
+            PersonnelStatusLog.objects.create(
+                user=trainee, active_duty=False, leave_type='training',
+                reason='参加省保安公司武装押运员年度复训（两天）',
+                operator=admin)
+
     # ---------- 演示任务 ----------
     def _seed_tasks(self, routes, boxes, users):
         # 每次重建任务，保证状态可演示
@@ -271,7 +297,7 @@ class Command(BaseCommand):
             'name': '海淀线下解款任务', 'notes': '',
             'assignees': [
                 {'user_id': users['2003'].id, 'role_on_task': 'car_captain'},
-                {'user_id': users['2002'].id, 'role_on_task': 'guard'},
+                {'user_id': users['2005'].id, 'role_on_task': 'guard'},
                 {'user_id': users['3002'].id, 'role_on_task': 'driver'}],
             'boxes': [
                 {'box_id': boxes['KX-ZGC-01'].id, 'target_stop_sequence': 1},
@@ -290,7 +316,7 @@ class Command(BaseCommand):
             'name': '朝阳环线加钞下解任务', 'notes': '含ATM加钞箱',
             'assignees': [
                 {'user_id': users['2004'].id, 'role_on_task': 'car_captain'},
-                {'user_id': users['2005'].id, 'role_on_task': 'guard'},
+                {'user_id': users['2001'].id, 'role_on_task': 'guard'},
                 {'user_id': users['3004'].id, 'role_on_task': 'driver'}],
             'boxes': [
                 {'box_id': boxes['KX-GM-01'].id, 'target_stop_sequence': 1},
@@ -309,8 +335,8 @@ class Command(BaseCommand):
             'planned_depart': time(13, 30), 'planned_return': time(16, 30),
             'name': '城西线尾箱上收任务', 'notes': '下午回收昨日下解款箱',
             'assignees': [
-                {'user_id': users['2001'].id, 'role_on_task': 'car_captain'},
-                {'user_id': users['2003'].id, 'role_on_task': 'guard'},
+                {'user_id': users['2002'].id, 'role_on_task': 'car_captain'},
+                {'user_id': users['2007'].id, 'role_on_task': 'guard'},
                 {'user_id': users['3003'].id, 'role_on_task': 'driver'}],
             'boxes': [
                 {'box_id': boxes['KX-JRJ-01'].id, 'target_stop_sequence': 1},

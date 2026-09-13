@@ -74,15 +74,19 @@
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import api from '../api/http'
 import { TASK_STATUS } from '../constants'
 
+const route = useRoute()
 const rows = ref([])
 const loading = ref(false)
 const total = ref(0)
 const page = ref(1)
 const pageSize = 20
-const filters = reactive({ status: '', date: '', keyword: '' })
+const filters = reactive({
+  status: '', date: '', keyword: route.query.keyword || '',
+})
 
 async function load() {
   loading.value = true

@@ -3,10 +3,14 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
+from accounts.models import User
+
 from .models import (BoxTaskStatus, CashBox, Handover, HandoverPhase, Incident,
-                     StopStatus, Task, TaskAssignee, TaskBox, TaskLog,
-                     TaskRole, TaskStatus, TaskStop, Vehicle)
+                     PersonnelStatusLog, StopStatus, Task, TaskAssignee, TaskBox,
+                     TaskLog, TaskRole, TaskStatus, TaskStop, Vehicle,
+                     VehicleStatusLog)
 from .models_base import BranchType
+from .resource_service import ResourceService
 
 
 class TaskService:
@@ -22,13 +26,10 @@ class TaskService:
         if isinstance(vehicle, int):
             vehicle = Vehicle.objects.get(id=vehicle)
 
-        if vehicle.status == Vehicle.Status.MAINTENANCE:
-            raise ValidationError('车辆处于维修状态，无法派车')
-        busy = (Task.objects.filter(vehicle=vehicle)
-                .exclude(status__in=[TaskStatus.COMPLETED, TaskStatus.CANCELLED])
-                .filter(planned_date=validated['planned_date']).exists())
-        if busy:
-            raise ValidationError('该车辆当天已有未完成任务')
+        vehicle_reason = ResourceService.vehicle_unavailable_reason(
+            vehicle, validated['planned_date'])
+        if vehicle_reason:
+            raise ValidationError(vehicle_reason)
 
         task = Task.objects.create(
             direction=validated['direction'],
@@ -58,9 +59,16 @@ class TaskService:
             )
             stops.append(stop)
 
-        # 人员
+        # 人员（在岗、岗位匹配、同日任务占用逐项校验，给出明确冲突原因）
         for a in validated['assignees']:
-            TaskAssignee.objects.create(task=task, user_id=a['user_id'],
+            user = User.objects.filter(id=a['user_id']).first()
+            if user is None:
+                raise ValidationError('所选人员不存在')
+            reason = ResourceService.user_unavailable_reason(
+                user, validated['planned_date'], a['role_on_task'])
+            if reason:
+                raise ValidationError(reason)
+            TaskAssignee.objects.create(task=task, user=user,
                                         role_on_task=a['role_on_task'])
 
         # 款箱
@@ -118,6 +126,7 @@ class TaskService:
         task.save(update_fields=['status', 'actual_depart', 'updated_at'])
         task.vehicle.status = Vehicle.Status.ON_DUTY
         task.vehicle.save(update_fields=['status'])
+        ResourceService.log_vehicle_dispatch(task.vehicle, task, actor)
         TaskService._log(task, 'depart',
                          f'车辆 {task.vehicle.plate} 从{task.depot.name}出发', actor)
         return task
@@ -155,6 +164,10 @@ class TaskService:
 
         if not data.get('from_user_id') or not data.get('to_user_id'):
             raise ValidationError('交接必须登记交出人和接收人（双人核对）')
+        from_person = User.objects.filter(id=data['from_user_id']).first()
+        to_person = User.objects.filter(id=data['to_user_id']).first()
+        ResourceService.require_on_duty(from_person, '交出方')
+        ResourceService.require_on_duty(to_person, '接收方')
 
         # 阶段与前置校验
         if phase == HandoverPhase.VAULT_OUT:
@@ -328,6 +341,11 @@ class TaskService:
             task.save(update_fields=['status', 'actual_return', 'updated_at'])
             task.vehicle.status = Vehicle.Status.IDLE
             task.vehicle.save(update_fields=['status'])
+            VehicleStatusLog.objects.create(
+                vehicle=task.vehicle, from_status=Vehicle.Status.ON_DUTY,
+                to_status=Vehicle.Status.IDLE,
+                reason=f'任务 {task.task_no} 完成，车辆归队',
+                task=task, operator=actor)
             TaskService._log(task, 'completed',
                              '全部交接完成，任务结束，车辆归队', actor)
 
@@ -367,6 +385,11 @@ class TaskService:
         task.save(update_fields=['status', 'actual_return', 'updated_at'])
         task.vehicle.status = Vehicle.Status.IDLE
         task.vehicle.save(update_fields=['status'])
+        VehicleStatusLog.objects.create(
+            vehicle=task.vehicle, from_status=Vehicle.Status.ON_DUTY,
+            to_status=Vehicle.Status.IDLE,
+            reason=f'任务 {task.task_no} 完成，车辆归队',
+            task=task, operator=actor)
         TaskService._log(task, 'completed', '任务完成，车辆归队', actor)
         return task
 
@@ -378,9 +401,15 @@ class TaskService:
         task.status = TaskStatus.CANCELLED
         task.notes = (task.notes + f'｜取消原因：{reason}').strip()
         task.save(update_fields=['status', 'notes', 'updated_at'])
+        old_vehicle_status = task.vehicle.status
         task.vehicle.status = Vehicle.Status.IDLE
         task.vehicle.save(update_fields=['status'])
-        # 还原款箱实物状态：下解箱回库空闲，上收箱退回网点已送达
+        if old_vehicle_status == Vehicle.Status.ON_DUTY:
+            VehicleStatusLog.objects.create(
+                vehicle=task.vehicle, from_status=old_vehicle_status,
+                to_status=Vehicle.Status.IDLE,
+                reason=f'任务 {task.task_no} 取消，车辆归队',
+                task=task, operator=actor)
         restore_status = (CashBox.Status.IDLE if task.direction == Task.Direction.OUTBOUND
                           else CashBox.Status.DELIVERED)
         box_ids = list(task.taskbox_set.values_list('box_id', flat=True))

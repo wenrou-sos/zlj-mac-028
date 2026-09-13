@@ -2,17 +2,20 @@ from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from accounts.models import User
+from accounts.models import LeaveType, User
 
-from .models import (Branch, CashBox, Handover, Incident, Route, RouteStop,
-                     Task, TaskAssignee, TaskBox, TaskLog, TaskStop, Vehicle)
+from .models import (Branch, CashBox, Handover, Incident, PersonnelStatusLog,
+                     Route, RouteStop, Task, TaskAssignee, TaskBox, TaskLog,
+                     TaskStop, Vehicle, VehicleStatusLog)
+from .resource_service import ResourceService
 from .serializers import (ArriveStopSerializer, BranchSerializer,
                           CashBoxSerializer, HandoverActionSerializer,
                           HandoverSerializer, IncidentCreateSerializer,
-                          IncidentSerializer, RouteListSerializer,
-                          RouteSerializer, StaffBriefSerializer,
-                          TaskCreateSerializer, TaskDetailSerializer,
-                          TaskListSerializer, VehicleSerializer)
+                          IncidentSerializer, PersonnelStatusLogSerializer,
+                          RouteListSerializer, RouteSerializer,
+                          StaffBriefSerializer, TaskCreateSerializer,
+                          TaskDetailSerializer, TaskListSerializer,
+                          VehicleSerializer, VehicleStatusLogSerializer)
 from .services import TaskService
 
 
@@ -32,6 +35,34 @@ class VehicleViewSet(viewsets.ModelViewSet):
     queryset = Vehicle.objects.select_related('home_branch').all()
     serializer_class = VehicleSerializer
     filterset_fields = ['status']
+
+    @action(detail=True, methods=['post'], url_path='repair')
+    def send_repair(self, request, pk=None):
+        vehicle = self.get_object()
+        reason = (request.data.get('reason') or '').strip()
+        if not reason:
+            return Response({'detail': '请填写送修原因'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        log = ResourceService.send_vehicle_repair(vehicle, reason, request.user)
+        return Response({
+            'vehicle': VehicleSerializer(vehicle).data,
+            'log': VehicleStatusLogSerializer(log).data,
+        })
+
+    @action(detail=True, methods=['post'], url_path='return-service')
+    def return_service(self, request, pk=None):
+        vehicle = self.get_object()
+        log = ResourceService.return_vehicle_service(vehicle, request.user)
+        return Response({
+            'vehicle': VehicleSerializer(vehicle).data,
+            'log': VehicleStatusLogSerializer(log).data,
+        })
+
+    @action(detail=True, methods=['get'], url_path='status-logs')
+    def status_logs(self, request, pk=None):
+        vehicle = self.get_object()
+        logs = vehicle.status_logs.select_related('operator', 'task')[:50]
+        return Response(VehicleStatusLogSerializer(logs, many=True).data)
 
 
 class CashBoxViewSet(viewsets.ModelViewSet):
@@ -62,11 +93,46 @@ class StaffViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = StaffBriefSerializer
 
     def get_queryset(self):
-        qs = User.objects.filter(is_active=True)
+        qs = User.objects.filter(is_active=True).select_related('branch')
         role = self.request.query_params.get('role')
         if role:
             qs = qs.filter(role=role)
+        duty = self.request.query_params.get('duty')
+        if duty == 'on':
+            qs = qs.filter(active_duty=True)
         return qs.order_by('employee_no')
+
+    @action(detail=True, methods=['post'], url_path='leave')
+    def leave(self, request, pk=None):
+        user = self.get_object()
+        leave_type = request.data.get('leave_type') or 'rest'
+        if leave_type not in dict(LeaveType.choices):
+            return Response({'detail': '缺勤类型不合法'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        reason = (request.data.get('reason') or '').strip()
+        if not reason:
+            return Response({'detail': '请填写事由'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        log = ResourceService.staff_leave(user, leave_type, reason, request.user)
+        return Response({
+            'staff': StaffBriefSerializer(user).data,
+            'log': PersonnelStatusLogSerializer(log).data,
+        })
+
+    @action(detail=True, methods=['post'], url_path='return-duty')
+    def return_duty(self, request, pk=None):
+        user = self.get_object()
+        log = ResourceService.staff_return(user, request.user)
+        return Response({
+            'staff': StaffBriefSerializer(user).data,
+            'log': PersonnelStatusLogSerializer(log).data,
+        })
+
+    @action(detail=True, methods=['get'], url_path='duty-logs')
+    def duty_logs(self, request, pk=None):
+        user = self.get_object()
+        logs = user.duty_logs.select_related('operator')[:50]
+        return Response(PersonnelStatusLogSerializer(logs, many=True).data)
 
 
 class TaskViewSet(viewsets.ModelViewSet):

@@ -20,6 +20,13 @@ class Position(models.TextChoices):
     CLERK = 'clerk', '网点柜员'
 
 
+class LeaveType(models.TextChoices):
+    VACATION = 'vacation', '休假'
+    TRAINING = 'training', '培训'
+    REST = 'rest', '休息'
+    OTHER = 'other', '其他'
+
+
 class User(AbstractUser):
     """系统用户，同时也是押运参与人员档案。"""
 
@@ -37,6 +44,9 @@ class User(AbstractUser):
         related_name='staff',
     )
     active_duty = models.BooleanField('今日在岗', default=True)
+    leave_type = models.CharField('缺勤类型', max_length=20,
+                                  choices=LeaveType.choices, blank=True,
+                                  default='')
 
     class Meta:
         verbose_name = '用户/人员'
@@ -54,3 +64,9 @@ class User(AbstractUser):
     def is_office_staff(self):
         """调度/金库/管理员等后台角色。"""
         return self.role in (Role.DISPATCHER, Role.VAULT_KEEPER, Role.ADMIN)
+
+    @property
+    def duty_display(self):
+        if self.active_duty:
+            return '在岗'
+        return self.get_leave_type_display() if self.leave_type else '休息'

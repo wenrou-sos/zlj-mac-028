@@ -2,8 +2,10 @@ from rest_framework import serializers
 
 from accounts.models import User
 
-from .models import (Branch, CashBox, Handover, Incident, Route, RouteStop,
-                     Task, TaskAssignee, TaskBox, TaskLog, TaskStop, Vehicle)
+from .models import (Branch, CashBox, Handover, Incident, PersonnelStatusLog,
+                     Route, RouteStop, Task, TaskAssignee, TaskBox, TaskLog,
+                     TaskStop, Vehicle, VehicleStatusLog)
+from .resource_service import ResourceService
 
 
 # ---------- 基础档案 ----------
@@ -24,11 +26,25 @@ class VehicleSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     home_branch_name = serializers.CharField(source='home_branch.name', read_only=True,
                                              default='')
+    busy_task_no = serializers.SerializerMethodField()
+    schedulable = serializers.SerializerMethodField()
+    unavailable_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = Vehicle
         fields = ['id', 'plate', 'model', 'capacity', 'gps_device', 'status',
-                  'status_display', 'home_branch', 'home_branch_name', 'note']
+                  'status_display', 'home_branch', 'home_branch_name', 'note',
+                  'busy_task_no', 'schedulable', 'unavailable_reason']
+
+    def get_busy_task_no(self, obj):
+        busy = ResourceService.vehicle_busy_task(obj)
+        return busy.task_no if busy else None
+
+    def get_schedulable(self, obj):
+        return ResourceService.vehicle_unavailable_reason(obj) is None
+
+    def get_unavailable_reason(self, obj):
+        return ResourceService.vehicle_unavailable_reason(obj)
 
 
 class CashBoxSerializer(serializers.ModelSerializer):
@@ -83,12 +99,25 @@ class StaffBriefSerializer(serializers.ModelSerializer):
     role_display = serializers.CharField(source='get_role_display', read_only=True)
     position_display = serializers.CharField(source='get_position_display', read_only=True)
     branch_name = serializers.CharField(source='branch.name', read_only=True, default='')
+    duty_display = serializers.CharField(read_only=True)
+    busy_task_nos = serializers.SerializerMethodField()
+    schedulable = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = ['id', 'name', 'employee_no', 'role', 'role_display',
                   'position', 'position_display', 'phone', 'branch',
-                  'branch_name', 'active_duty']
+                  'branch_name', 'active_duty', 'leave_type', 'duty_display',
+                  'busy_task_nos', 'schedulable']
+
+    def get_busy_task_nos(self, obj):
+        from .resource_service import ResourceService
+        return [t.task_no for t in ResourceService.user_busy_tasks(obj)][:5]
+
+    def get_schedulable(self, obj):
+        from .resource_service import ResourceService
+        return (obj.is_active and obj.active_duty
+                and not ResourceService.user_busy_tasks(obj))
 
 
 # ---------- 交接 / 异常 / 日志 ----------
@@ -321,3 +350,42 @@ class IncidentCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Incident
         fields = ['stop', 'task_box', 'category', 'severity', 'description']
+
+
+# ---------- 资源状态留痕 ----------
+
+class VehicleStatusLogSerializer(serializers.ModelSerializer):
+    from_status_display = serializers.SerializerMethodField()
+    to_status_display = serializers.CharField(source='get_to_status_display',
+                                              read_only=True)
+    operator_name = serializers.CharField(source='operator.name',
+                                          read_only=True, default='系统')
+    vehicle_plate = serializers.CharField(source='vehicle.plate', read_only=True)
+
+    class Meta:
+        model = VehicleStatusLog
+        fields = ['id', 'vehicle', 'vehicle_plate', 'from_status',
+                  'from_status_display', 'to_status', 'to_status_display',
+                  'reason', 'task', 'operator', 'operator_name', 'created_at']
+
+    def get_from_status_display(self, obj):
+        return dict(Vehicle.Status.choices).get(obj.from_status, '')
+
+
+class PersonnelStatusLogSerializer(serializers.ModelSerializer):
+    leave_type_display = serializers.SerializerMethodField()
+    operator_name = serializers.CharField(source='operator.name',
+                                          read_only=True, default='系统')
+    user_name = serializers.CharField(source='user.name', read_only=True)
+
+    class Meta:
+        model = PersonnelStatusLog
+        fields = ['id', 'user', 'user_name', 'active_duty', 'leave_type',
+                  'leave_type_display', 'reason', 'task', 'operator',
+                  'operator_name', 'created_at']
+
+    def get_leave_type_display(self, obj):
+        if obj.active_duty:
+            return '在岗'
+        from accounts.models import LeaveType
+        return dict(LeaveType.choices).get(obj.leave_type, '休息')
