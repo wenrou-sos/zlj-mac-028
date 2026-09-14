@@ -246,6 +246,7 @@ class TaskStopSerializer(serializers.ModelSerializer):
     lat = serializers.DecimalField(source='branch.lat', max_digits=10,
                                    decimal_places=6, read_only=True)
     task_boxes = TaskBoxSerializer(many=True, read_only=True)
+    verify_code = serializers.SerializerMethodField()
 
     class Meta:
         model = TaskStop
@@ -253,6 +254,14 @@ class TaskStopSerializer(serializers.ModelSerializer):
                   'branch_type', 'lng', 'lat', 'planned_arrival', 'actual_arrival',
                   'actual_departure', 'verify_code', 'status', 'status_display',
                   'note', 'task_boxes']
+
+    def get_verify_code(self, obj):
+        from .permissions import can_see_verify_code
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if user and can_see_verify_code(obj.task, obj, user):
+            return obj.verify_code
+        return ''
 
 
 class TaskListSerializer(serializers.ModelSerializer):

@@ -597,5 +597,54 @@ denied('车长不能办结任务', 'POST', f'/api/tasks/{tid}/complete/', test_c
 denied('柜员不能取消任务', 'POST', f'/api/tasks/{tid}/cancel/', clerk_token,
        {'reason': '越权取消'})
 
+# 24. 调度员不亲手办款箱交接（前端不显示按钮，后端也必须 403）
+# 任务002中关村站在途款箱：车长未完成的接收，调度员尝试办理 → 403
+_, d002 = call('GET', f"/api/tasks/{t002['id']}/", token)
+arr = next(s for s in d002['stops'] if s['status'] == 'arrived')
+tb_intr = next((b for b in arr['task_boxes'] if b['status'] == 'in_transit'), None)
+if tb_intr:
+    c, r = call('POST', f"/api/tasks/{t002['id']}/handover/", token, {
+        'task_box_id': tb_intr['id'], 'phase': 'branch_recv',
+        'stop_id': arr['id'], 'seal_no_in': 'FJ1002',
+        'code': arr['verify_code'],
+        'from_user_id': next(a['user'] for a in d002['assignees']
+                             if a['role_on_task'] == 'car_captain'),
+        'to_user_id': next(u['id'] for u in
+                           call('GET', '/api/staff/?role=branch_clerk', token)[1]['results']
+                           if u['name'] == '蒋帆')})
+    check('调度员办理网点交接被拒(403)', c == 403, f'HTTP {c} {errmsg(r)[:50]}')
+
+# 25. 柜员只能办本站：中关村柜员尝试办理任务004金融街站移交 → 403
+_, t4d = call('GET', f"/api/tasks/{t4['id']}/", token)
+# 任务004已在前面完成；直接校验候选人接口的站点限制即可（403）
+jrj_stop = next((s for s in t4d['stops'] if s['branch_name'] == '金融街支行'),
+                t4d['stops'][0])
+c, _ = call('GET',
+            f"/api/tasks/{t4['id']}/handover-candidates/?phase=branch_pickup&stop_id={jrj_stop['id']}",
+            clerk_token)
+check('柜员查询外站交接候选人被拒(403)', c == 403, f'HTTP {c}')
+
+# 26. 验证码最小知情：到站后本站柜员/车组可见，其他角色脱敏
+_, d002_clerk = call('GET', f"/api/tasks/{t002['id']}/", clerk_token)
+zgc = next(s for s in d002_clerk['stops'] if s['branch_name'] == '中关村支行')
+other_stop = next((s for s in d002_clerk['stops']
+                   if s['branch_name'] != '中关村支行'), None)
+check('本站到站后柜员可见本站验证码', zgc['verify_code'] != '', zgc['verify_code'])
+check('本站柜员看不到外站验证码',
+      other_stop is None or other_stop['verify_code'] == '',
+      other_stop['verify_code'] if other_stop else '无外站(任务仅本站)')
+# 本站未到达（pending/en_route）时柜员也看不到码：用已派车未出发的亚运村任务
+yyc_clerk_token = login('5007')[0]
+_, yyc_d = call('GET', f"/api/tasks/{new_task['id']}/", yyc_clerk_token)
+yyc_stop = yyc_d['stops'][0]
+check('未到站时柜员看不到本站验证码', yyc_stop['verify_code'] == '',
+      repr(yyc_stop['verify_code']))
+# 驾驶员看本人任务，验证码一律脱敏
+_, driver_task_list = call('GET', '/api/tasks/?page_size=10', driver_token)
+dt_id = driver_task_list['results'][0]['id']
+_, dt_detail = call('GET', f'/api/tasks/{dt_id}/', driver_token)
+codes = [s['verify_code'] for s in dt_detail['stops']]
+check('驾驶员看不到交接验证码', all(c == '' for c in codes), str(codes))
+
 print(f"\n==== {sum(1 for _, c, _ in results if c)}/{len(results)} passed ====")
 assert all(c for _, c, _ in results), '存在失败用例'

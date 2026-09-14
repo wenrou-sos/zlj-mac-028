@@ -196,6 +196,22 @@ def can_view_task(task, user):
     return False
 
 
+def can_see_verify_code(task, stop, user):
+    """交接验证码按最小知情范围开放。"""
+    if not user.is_authenticated:
+        return False
+    if is_admin(user) or user.role == Role.DISPATCHER:
+        return True
+    # 随车押运人员（车长/押运员）：本站到达后可见
+    if task_crew_role(task, user) in CREW_GUARD_ROLES_ON_TASK:
+        return stop.status in ('arrived', 'done')
+    # 本站柜员：仅自己网点、车辆到站后可见
+    if user.role == Role.BRANCH_CLERK:
+        return (user.branch_id == stop.branch_id
+                and stop.status in ('arrived', 'done'))
+    return False
+
+
 def visible_handovers(qs, user):
     if not user.is_authenticated:
         return qs.none()

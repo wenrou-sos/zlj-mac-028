@@ -161,15 +161,18 @@
             </el-collapse-item>
           </el-collapse>
 
-          <!-- 上收回库按钮 -->
+          <!-- 上收回库按钮（仅本金库管理员可操作） -->
           <div v-if="task.direction === 'inbound'" class="return-bar">
-            <template v-if="inTransitCount > 0">
+            <template v-if="canKeeper && inTransitCount > 0">
               <el-button v-for="tb in inboundReturnable" :key="tb.id" size="small"
                          type="primary" plain class="mono"
                          @click="openHandover(tb, null)">
                 {{ tb.box_no }} 回库核对
               </el-button>
             </template>
+            <span v-else-if="inTransitCount > 0" style="color:#909399">
+              {{ inTransitCount }} 个款箱返程在途，等待金库回库核对
+            </span>
             <span v-else-if="task.status !== 'planned'" style="color:#67c23a">
               全部款箱已回收入库
             </span>
@@ -376,15 +379,18 @@ async function onTab(name) {
   if (name === 'reconcile') await loadReconcile()
 }
 
-// 仅当当前登录人有权办理该环节时，才显示交接按钮
-function canRecord(phase) {
-  if (isDispatcher.value) return true
-  if (phase === 'vault_out' || phase === 'vault_return') return canKeeper.value
-  // 网点交接：本任务车组 或 本站网点柜员
+// 仅当当前登录人有权办理该环节时，才显示交接按钮。
+// phase + 目标停靠点共同决定权限：柜员只能办自己网点那一站。
+function canRecord(phase, stop = null) {
+  // 调度员只指挥不亲手办交接；驾驶员/其他岗位无交接权
+  if (phase === 'vault_out' || phase === 'vault_return') {
+    return canKeeper.value
+  }
   if (isTaskGuard.value) return true
-  if (me.value?.role === 'branch_clerk') {
-    // 柜员只能在到达本站后办理本站交接（具体站点由 tb.target_stop 决定）
-    return true
+  if (me.value?.role === 'branch_clerk' && stop) {
+    // 柜员只能办理本人所属网点停靠点的交接
+    const stopBranchId = stop.branch
+    return me.value.branch === stopBranchId
   }
   return false
 }
@@ -399,12 +405,12 @@ function boxAction(tb, stop) {
     }
     if (tb.status === 'in_transit' && stop.status === 'arrived') {
       const phase = 'branch_recv'
-      return canRecord(phase) ? { phase, label: '网点接收' } : null
+      return canRecord(phase, stop) ? { phase, label: '网点接收' } : null
     }
   } else {
     if (tb.status === 'pending_out' && stop.status === 'arrived') {
       const phase = 'branch_pickup'
-      return canRecord(phase) ? { phase, label: '网点移交' } : null
+      return canRecord(phase, stop) ? { phase, label: '网点移交' } : null
     }
     if (tb.status === 'in_transit') {
       const phase = 'vault_return'

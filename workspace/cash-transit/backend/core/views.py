@@ -202,14 +202,14 @@ class TaskViewSet(viewsets.ModelViewSet):
         task = self._get_task_or_deny(pk)
         if task is None:
             return Response({'detail': '任务不存在'}, status=404)
-        return Response(TaskDetailSerializer(task).data)
+        return Response(self.get_serializer(task).data)
 
     def create(self, request, *args, **kwargs):
         # 服务层做岗位校验（错误信息更具体）
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         task = TaskService.create_task(serializer.validated_data, request.user)
-        return Response(TaskDetailSerializer(task).data,
+        return Response(TaskDetailSerializer(task, context=self.get_serializer_context()).data,
                         status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
@@ -266,6 +266,11 @@ class TaskViewSet(viewsets.ModelViewSet):
         elif phase in ('branch_recv', 'branch_pickup'):
             stop_id = request.query_params.get('stop_id')
             stop = task.stops.filter(id=stop_id).first()
+            # 柜员只能查询本人所属网点站点的交接候选人
+            if (request.user.role == 'branch_clerk'
+                    and (not stop or stop.branch_id != request.user.branch_id)):
+                from rest_framework.exceptions import PermissionDenied
+                raise PermissionDenied('只能查询您所属网点停靠点的交接信息')
             clerks = User.objects.none()
             if stop:
                 clerks = User.objects.filter(
@@ -290,7 +295,7 @@ class TaskViewSet(viewsets.ModelViewSet):
     def depart(self, request, pk=None):
         task = self._action_task(request, pk)
         TaskService.depart(task, request.user)
-        return Response(TaskDetailSerializer(task).data)
+        return Response(self.get_serializer(task).data)
 
     @action(detail=True, methods=['post'], url_path='arrive')
     def arrive(self, request, pk=None):
@@ -298,7 +303,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         ser = ArriveStopSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         TaskService.arrive_stop(task, ser.validated_data['stop_id'], request.user)
-        return Response(TaskDetailSerializer(task).data)
+        return Response(self.get_serializer(task).data)
 
     @action(detail=True, methods=['post'], url_path='handover')
     def handover(self, request, pk=None):
@@ -308,7 +313,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         h = TaskService.handover(task, ser.validated_data, request.user)
         return Response({
             'handover': HandoverSerializer(h).data,
-            'task': TaskDetailSerializer(task).data,
+            'task': self.get_serializer(task).data,
         })
 
     @action(detail=True, methods=['post'], url_path='finish-stop')
@@ -317,19 +322,19 @@ class TaskViewSet(viewsets.ModelViewSet):
         ser = ArriveStopSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         TaskService.finish_stop(task, ser.validated_data['stop_id'], request.user)
-        return Response(TaskDetailSerializer(task).data)
+        return Response(self.get_serializer(task).data)
 
     @action(detail=True, methods=['post'])
     def complete(self, request, pk=None):
         task = self._action_task(request, pk)
         TaskService.complete(task, request.user)
-        return Response(TaskDetailSerializer(task).data)
+        return Response(self.get_serializer(task).data)
 
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         task = self._action_task(request, pk)
         TaskService.cancel(task, request.user, request.data.get('reason', ''))
-        return Response(TaskDetailSerializer(task).data)
+        return Response(self.get_serializer(task).data)
 
     # ---- 异常 ----
     @action(detail=True, methods=['get', 'post'], url_path='incidents')
@@ -351,7 +356,7 @@ class TaskViewSet(viewsets.ModelViewSet):
             return Response({'detail': '请填写处置说明'},
                             status=status.HTTP_400_BAD_REQUEST)
         TaskService.resolve_incident(task, incident_id, request.user, resolution)
-        return Response(TaskDetailSerializer(task).data)
+        return Response(self.get_serializer(task).data)
 
     # ---- 交接核对表 ----
     @action(detail=True, methods=['get'])
