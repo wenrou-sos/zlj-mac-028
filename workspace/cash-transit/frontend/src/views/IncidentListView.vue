@@ -1,6 +1,8 @@
 <template>
   <div class="page-container">
     <h2 class="page-title">异常情况</h2>
+    <el-alert type="info" :closable="false" show-icon style="margin-bottom:12px"
+              :title="scopeHint" />
     <el-card>
       <div class="toolbar">
         <el-radio-group v-model="filters.status" @change="load">
@@ -50,10 +52,11 @@
           <template #default="{ row }">
             <span v-if="row.resolution" class="resolved">{{ row.resolution }}
               （{{ row.resolved_by_name }}）</span>
-            <el-button v-else link type="primary"
+            <el-button v-else-if="isDisp" link type="primary"
                        @click="$router.push(`/tasks/${row.task}`)">
               去任务处置 →
             </el-button>
+            <el-tag v-else size="small" type="warning">待调度员处置</el-tag>
           </template>
         </el-table-column>
       </el-table>
@@ -65,9 +68,29 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, computed } from 'vue'
 import api from '../api/http'
 import { INCIDENT_CATEGORY, INCIDENT_STATUS, SEVERITY } from '../constants'
+import { useAuthStore } from '../store/auth'
+import { isDispatcher as isDispFn } from '../auth'
+
+const auth = useAuthStore()
+const isDisp = computed(() => isDispFn(auth.user))
+const scopeHint = computed(() => {
+  switch (auth.user?.role) {
+    case 'dispatcher':
+    case 'admin':
+      return '全部任务异常（处置操作仅调度员可执行）'
+    case 'guard':
+      return '仅显示本人随车任务的异常'
+    case 'vault_keeper':
+      return '仅显示本金库相关任务的异常'
+    case 'branch_clerk':
+      return '仅显示本网点相关任务的异常'
+    default:
+      return '仅显示本人相关任务的异常'
+  }
+})
 
 const rows = ref([])
 const loading = ref(false)

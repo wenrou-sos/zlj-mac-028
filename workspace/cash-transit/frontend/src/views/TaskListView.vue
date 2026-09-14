@@ -1,6 +1,6 @@
 <template>
   <div class="page-container">
-    <h2 class="page-title">押运任务</h2>
+    <h2 class="page-title">{{ isDispatcher ? '押运任务' : '我的押运任务' }}</h2>
     <el-card>
       <div class="toolbar">
         <el-radio-group v-model="filters.status" @change="load">
@@ -10,12 +10,14 @@
           </el-radio-button>
         </el-radio-group>
         <div style="flex:1"></div>
-        <el-date-picker v-model="filters.date" type="date" value-format="YYYY-MM-DD"
+        <el-date-picker v-if="isDispatcher" v-model="filters.date" type="date"
+                        value-format="YYYY-MM-DD"
                         placeholder="按日期筛选" clearable style="width:150px"
                         @change="load" />
-        <el-input v-model="filters.keyword" placeholder="任务编号" clearable
-                  style="width:170px" @keyup.enter="load" @clear="load" />
-        <el-button type="primary" @click="$router.push('/tasks/new')">
+        <el-input v-if="isDispatcher" v-model="filters.keyword" placeholder="任务编号"
+                  clearable style="width:170px" @keyup.enter="load" @clear="load" />
+        <el-button v-if="isDispatcher" type="primary"
+                   @click="$router.push('/tasks/new')">
           <el-icon><Plus /></el-icon>安排任务
         </el-button>
       </div>
@@ -73,12 +75,16 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../api/http'
+import { useAuthStore } from '../store/auth'
+import { isDispatcher as isDisp } from '../auth'
 import { TASK_STATUS } from '../constants'
 
 const route = useRoute()
+const auth = useAuthStore()
+const isDispatcher = computed(() => isDisp(auth.user))
 const rows = ref([])
 const loading = ref(false)
 const total = ref(0)

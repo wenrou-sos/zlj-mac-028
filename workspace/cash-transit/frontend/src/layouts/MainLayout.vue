@@ -11,17 +11,30 @@
       <el-menu :default-active="$route.path" router class="menu"
                background-color="transparent" text-color="#c5d4e8"
                active-text-color="#ffffff">
-        <el-menu-item index="/dashboard"><el-icon><DataLine /></el-icon><span>调度总览</span></el-menu-item>
-        <el-sub-menu index="task">
+        <el-menu-item v-if="canShowMenu(auth.user, 'dashboard')" index="/dashboard">
+          <el-icon><DataLine /></el-icon><span>调度总览</span>
+        </el-menu-item>
+        <el-sub-menu v-if="canShowMenu(auth.user, 'tasks')" index="task">
           <template #title><el-icon><Van /></el-icon><span>押运任务</span></template>
-          <el-menu-item index="/tasks">任务列表</el-menu-item>
-          <el-menu-item index="/tasks/new">安排任务</el-menu-item>
+          <el-menu-item v-if="isDispatcher(auth.user)" index="/tasks">任务列表</el-menu-item>
+          <el-menu-item v-if="isDispatcher(auth.user)" index="/tasks/new">安排任务</el-menu-item>
+          <el-menu-item v-if="!isDispatcher(auth.user)" index="/tasks">我的任务</el-menu-item>
         </el-sub-menu>
-        <el-menu-item index="/incidents"><el-icon><Warning /></el-icon><span>异常情况</span></el-menu-item>
-        <el-menu-item index="/handovers"><el-icon><DocumentChecked /></el-icon><span>交接记录</span></el-menu-item>
-        <el-menu-item index="/routes"><el-icon><Position /></el-icon><span>押运线路</span></el-menu-item>
-        <el-menu-item index="/branches"><el-icon><OfficeBuilding /></el-icon><span>网点金库</span></el-menu-item>
-        <el-menu-item index="/resources"><el-icon><User /></el-icon><span>车辆款箱人员</span></el-menu-item>
+        <el-menu-item v-if="canShowMenu(auth.user, 'incidents')" index="/incidents">
+          <el-icon><Warning /></el-icon><span>异常情况</span>
+        </el-menu-item>
+        <el-menu-item v-if="canShowMenu(auth.user, 'handovers')" index="/handovers">
+          <el-icon><DocumentChecked /></el-icon><span>交接记录</span>
+        </el-menu-item>
+        <el-menu-item v-if="isDispatcher(auth.user)" index="/routes">
+          <el-icon><Position /></el-icon><span>押运线路</span>
+        </el-menu-item>
+        <el-menu-item v-if="isDispatcher(auth.user)" index="/branches">
+          <el-icon><OfficeBuilding /></el-icon><span>网点金库</span>
+        </el-menu-item>
+        <el-menu-item v-if="isDispatcher(auth.user)" index="/resources">
+          <el-icon><User /></el-icon><span>车辆款箱人员</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -61,6 +74,7 @@
 <script setup>
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../store/auth'
+import { canShowMenu, isDispatcher } from '../auth'
 
 const auth = useAuthStore()
 const router = useRouter()

@@ -27,8 +27,8 @@
               返回 {{ r.depot_name }}
             </el-timeline-item>
           </el-timeline>
-          <el-button type="primary" plain size="small" style="width:100%"
-                     @click="useRoute(r)">
+          <el-button v-if="canDispatch" type="primary" plain size="small"
+                     style="width:100%" @click="arrangeTask(r)">
             <el-icon><Plus /></el-icon> 按此线路安排任务
           </el-button>
         </el-card>
@@ -38,15 +38,20 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { onMounted, ref, computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import api from '../api/http'
+import { useAuthStore } from '../store/auth'
+import { isDispatcher } from '../auth'
 
+const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
+const canDispatch = computed(() => isDispatcher(auth.user))
 const routes = ref([])
 const loading = ref(false)
 
-function useRoute(r) {
+function arrangeTask(r) {
   router.push({ path: '/tasks/new', query: { route: r.id } })
 }
 

@@ -70,7 +70,7 @@ async function onLogin() {
   try {
     await auth.login(username.value.trim(), password.value)
     ElMessage.success('登录成功')
-    router.push('/dashboard')
+    router.push('/')
   } catch (e) {
     // 拦截器已提示
   } finally {

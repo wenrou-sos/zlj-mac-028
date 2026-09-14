@@ -6,6 +6,7 @@ from rest_framework.exceptions import ValidationError
 from accounts.models import Role
 from .models import (PersonnelStatusLog, Task, TaskAssignee, TaskStatus,
                      Vehicle, VehicleStatusLog)
+from .permissions import require_dispatcher
 
 
 class ResourceService:
@@ -65,6 +66,7 @@ class ResourceService:
     @staticmethod
     @transaction.atomic
     def send_vehicle_repair(vehicle, reason, operator):
+        require_dispatcher(operator, '车辆送修登记')
         if vehicle.status == Vehicle.Status.MAINTENANCE:
             raise ValidationError('车辆已处于维修状态')
         busy = ResourceService.vehicle_busy_task(vehicle)
@@ -84,6 +86,7 @@ class ResourceService:
     @staticmethod
     @transaction.atomic
     def return_vehicle_service(vehicle, operator):
+        require_dispatcher(operator, '车辆复归待命')
         if vehicle.status != Vehicle.Status.MAINTENANCE:
             raise ValidationError('仅维修中的车辆可以复归待命')
         old = vehicle.status
@@ -105,6 +108,7 @@ class ResourceService:
     @staticmethod
     @transaction.atomic
     def staff_leave(user, leave_type, reason, operator):
+        require_dispatcher(operator, '人员请假登记')
         if not user.active_duty:
             raise ValidationError(f'{user.name} 已处于{user.duty_display}状态')
         busy = ResourceService.user_busy_tasks(user)
@@ -124,6 +128,7 @@ class ResourceService:
     @staticmethod
     @transaction.atomic
     def staff_return(user, operator):
+        require_dispatcher(operator, '人员复岗登记')
         if user.active_duty:
             raise ValidationError(f'{user.name} 已在岗，无需复岗')
         user.active_duty = True

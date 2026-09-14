@@ -75,6 +75,7 @@ STAFF = [
     ('2006', '周勇', 'guard', 'escort_guard', '13800002006', 'JK002'),
     ('2007', '徐刚', 'guard', 'car_captain', '13800002007', 'JK001'),
     ('2008', '马骏', 'guard', 'escort_guard', '13800002008', 'JK002'),
+    ('2009', '高翔', 'guard', 'car_captain', '13800002009', 'JK002'),
     ('3001', '吴铁军', 'driver', 'driver', '13800003001', 'JK001'),
     ('3002', '郑凯', 'driver', 'driver', '13800003002', 'JK001'),
     ('3003', '钱进宝', 'driver', 'driver', '13800003003', 'JK001'),
@@ -352,25 +353,28 @@ class Command(BaseCommand):
 
     # ---------- 任务流转脚本 ----------
     def _out_all(self, task, box_map, seal_map, users):
-        """全部款箱出库。box_map: box_no->box"""
+        """全部款箱出库（由任务所属金库管理员登记）。"""
+        vault_user = User.objects.filter(
+            role='vault_keeper', branch=task.depot).first()
+        captain_id = task.taskassignee_set.get(
+            role_on_task='car_captain').user_id
         for no, box in box_map.items():
             seal = seal_map[no]
             tb = task.taskbox_set.get(box=box)
             TaskService.handover(task, {
                 'task_box_id': tb.id, 'phase': 'vault_out',
                 'seal_no_in': seal,
-                'from_user_id': users['4001'].id,
-                'to_user_id': task.taskassignee_set.get(
-                    role_on_task='car_captain').user_id,
-            }, users['4001'])
+                'from_user_id': vault_user.id,
+                'to_user_id': captain_id,
+            }, vault_user)
 
     def _run_outbound(self, task, boxes, plan):
         """完整跑完一个下解任务。plan: box_no -> (seal, vault_user, clerk_user)"""
         seal_map = {no: seal for no, (seal, _, _) in plan.items()}
         self._out_all(task, {no: boxes[no] for no in plan}, seal_map,
                       {u.employee_no: u for u in User.objects.all()})
-        TaskService.depart(task, plan[list(plan)[0]][1])
         captain = task.taskassignee_set.get(role_on_task='car_captain').user
+        TaskService.depart(task, captain)
         for stop in task.stops.order_by('sequence'):
             TaskService.arrive_stop(task, stop.id, captain)
             for no, (seal, vault_user, clerk) in plan.items():
@@ -393,8 +397,8 @@ class Command(BaseCommand):
                     'KX-XYL-02': 'FJ1003'}
         self._out_all(task,
                       {k: boxes[k] for k in seal_map}, seal_map, users)
-        TaskService.depart(task, users['4001'])
         captain = task.taskassignee_set.get(role_on_task='car_captain').user
+        TaskService.depart(task, captain)
         stop1 = task.stops.get(sequence=1)
         TaskService.arrive_stop(task, stop1.id, captain)
         tb = task.taskbox_set.get(box=boxes['KX-ZGC-01'])
@@ -412,8 +416,8 @@ class Command(BaseCommand):
                     'KX-WJ-01': 'FJ2005'}
         self._out_all(task,
                       {k: boxes[k] for k in seal_map}, seal_map, users)
-        TaskService.depart(task, users['4002'])
         captain = task.taskassignee_set.get(role_on_task='car_captain').user
+        TaskService.depart(task, captain)
         stop1 = task.stops.get(sequence=1)
         TaskService.arrive_stop(task, stop1.id, captain)
         tb = task.taskbox_set.get(box=boxes['KX-GM-01'])

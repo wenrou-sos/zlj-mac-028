@@ -39,14 +39,14 @@
         <el-select v-model="form.from_user_id" filterable placeholder="选择交出人"
                    style="width:100%">
           <el-option v-for="u in fromOptions" :key="u.id" :value="u.id"
-                     :label="`${u.name}（${u.employee_no}）`" />
+                     :label="`${u.name}（${u.employee_no}）${u.role_display}`" />
         </el-select>
       </el-form-item>
       <el-form-item label="接收人" required>
-        <el-select v-model="toUserId" filterable placeholder="选择接收人"
-                   style="width:100%" @update:model-value="form.to_user_id = $event">
+        <el-select v-model="form.to_user_id" filterable placeholder="选择接收人"
+                   style="width:100%">
           <el-option v-for="u in toOptions" :key="u.id" :value="u.id"
-                     :label="`${u.name}（${u.employee_no}）`" />
+                     :label="`${u.name}（${u.employee_no}）${u.role_display}`" />
         </el-select>
       </el-form-item>
       <el-form-item label="备注">
@@ -73,8 +73,6 @@ const props = defineProps({
   tb: Object,
   phase: String,
   stop: Object,
-  staff: { type: Array, default: () => [] },
-  crew: { type: Array, default: () => [] },
 })
 const emit = defineEmits(['update:modelValue', 'saved'])
 
@@ -83,7 +81,7 @@ const visible = computed({
   set: (v) => emit('update:modelValue', v),
 })
 const saving = ref(false)
-const toUserId = ref(null)
+const candidates = ref({ from_users: [], to_users: [] })
 const form = reactive({ code: '', seal_no_in: '', seal_intact: true,
   from_user_id: null, to_user_id: null, remark: '' })
 
@@ -108,38 +106,23 @@ const sealPlaceholder = computed(() => {
   return '录入封签号（留空不核对）'
 })
 
-const fromOptions = computed(() => {
-  if (props.phase === 'vault_out')
-    return props.staff.filter((u) => u.role === 'vault_keeper'
-      && u.active_duty !== false)
-  // 车上交接由车长交出
-  return props.crew.filter((u) => u.position === 'car_captain')
-})
-const toOptions = computed(() => {
-  if (props.phase === 'branch_recv' || props.phase === 'branch_pickup') {
-    const bid = props.stop?.branch
-    const onDutyClerks = props.staff.filter(
-      (u) => u.role === 'branch_clerk' && u.active_duty !== false)
-    const clerks = onDutyClerks.filter(
-      (u) => !bid || !u.branch || u.branch === bid)
-    return clerks.length ? clerks : onDutyClerks
-  }
-  if (props.phase === 'vault_return')
-    return props.staff.filter((u) => u.role === 'vault_keeper'
-      && u.active_duty !== false)
-  // 出库接收 = 车长
-  return props.crew.filter((u) => u.position === 'car_captain')
-})
+const fromOptions = computed(() => candidates.value.from_users || [])
+const toOptions = computed(() => candidates.value.to_users || [])
 
-watch(() => props.modelValue, (open) => {
+watch(() => props.modelValue, async (open) => {
   if (!open) return
   Object.assign(form, { code: '', seal_no_in: '', seal_intact: true,
     from_user_id: null, to_user_id: null, remark: '' })
-  toUserId.value = null
-  // 预填默认交出/接收人
-  form.from_user_id = fromOptions.value[0]?.id || null
-  form.to_user_id = toOptions.value[0]?.id || null
-  toUserId.value = form.to_user_id
+  try {
+    const params = { phase: props.phase }
+    if (props.stop?.id) params.stop_id = props.stop.id
+    candidates.value = await api.get(
+      `/api/tasks/${props.taskId}/handover-candidates/`, { params })
+    form.from_user_id = candidates.value.from_users?.[0]?.id || null
+    form.to_user_id = candidates.value.to_users?.[0]?.id || null
+  } catch (e) {
+    // 403 等错误已由拦截器提示
+  }
 })
 
 async function save() {

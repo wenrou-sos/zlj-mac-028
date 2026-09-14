@@ -10,6 +10,9 @@ from .models import (BoxTaskStatus, CashBox, Handover, HandoverPhase, Incident,
                      TaskLog, TaskRole, TaskStatus, TaskStop, Vehicle,
                      VehicleStatusLog)
 from .models_base import BranchType
+from .permissions import (can_record_phase, require_dispatcher,
+                          require_incident_report, require_record_phase,
+                          require_task_captain, validate_handover_people)
 from .resource_service import ResourceService
 
 
@@ -18,6 +21,7 @@ class TaskService:
     @staticmethod
     @transaction.atomic
     def create_task(validated, creator):
+        require_dispatcher(creator, '派车排班')
         route = validated['route_id']
         if isinstance(route, int):
             from .models import Route
@@ -113,6 +117,7 @@ class TaskService:
     @staticmethod
     @transaction.atomic
     def depart(task, actor):
+        require_task_captain(task, actor, '出发操作')
         if task.status != TaskStatus.PLANNED:
             raise ValidationError('只有已派车状态的任务才能出发')
         if task.direction == Task.Direction.OUTBOUND:
@@ -138,6 +143,7 @@ class TaskService:
         stop = task.stops.filter(id=stop_id).first()
         if not stop:
             raise ValidationError('停靠点不存在')
+        require_task_captain(task, actor, '到达登记')
         if stop.status not in (StopStatus.EN_ROUTE, StopStatus.PENDING):
             raise ValidationError('该停靠点已到达或已完成')
         if task.status != TaskStatus.IN_TRANSIT:
@@ -162,12 +168,16 @@ class TaskService:
         stop = tb.target_stop
         now = timezone.now()
 
+        # 操作岗位权限
+        require_record_phase(actor, task, phase, stop)
+
         if not data.get('from_user_id') or not data.get('to_user_id'):
             raise ValidationError('交接必须登记交出人和接收人（双人核对）')
         from_person = User.objects.filter(id=data['from_user_id']).first()
         to_person = User.objects.filter(id=data['to_user_id']).first()
         ResourceService.require_on_duty(from_person, '交出方')
         ResourceService.require_on_duty(to_person, '接收方')
+        validate_handover_people(task, phase, stop, from_person, to_person)
 
         # 阶段与前置校验
         if phase == HandoverPhase.VAULT_OUT:
@@ -377,6 +387,7 @@ class TaskService:
     @staticmethod
     @transaction.atomic
     def finish_stop(task, stop_id, actor):
+        require_task_captain(task, actor, '办结停靠站')
         stop = task.stops.filter(id=stop_id).first()
         if not stop:
             raise ValidationError('停靠点不存在')
@@ -396,6 +407,7 @@ class TaskService:
     @staticmethod
     @transaction.atomic
     def complete(task, actor):
+        require_dispatcher(actor, '办结任务')
         terminal = BoxTaskStatus.DELIVERED if task.direction == Task.Direction.OUTBOUND \
             else BoxTaskStatus.RETURNED
         unfinished = task.taskbox_set.exclude(status=terminal).count()
@@ -423,6 +435,7 @@ class TaskService:
     @staticmethod
     @transaction.atomic
     def cancel(task, actor, reason=''):
+        require_dispatcher(actor, '取消任务')
         if task.status in (TaskStatus.COMPLETED, TaskStatus.CANCELLED):
             raise ValidationError('终态任务不可取消')
         task.status = TaskStatus.CANCELLED
@@ -450,6 +463,7 @@ class TaskService:
     @staticmethod
     @transaction.atomic
     def report_incident(task, data, actor):
+        require_incident_report(task, actor)
         if task.status in (TaskStatus.COMPLETED, TaskStatus.CANCELLED):
             raise ValidationError('已办结或已取消的任务不能上报异常')
         inc = Incident.objects.create(
@@ -470,6 +484,7 @@ class TaskService:
     @staticmethod
     @transaction.atomic
     def resolve_incident(task, incident_id, actor, resolution):
+        require_dispatcher(actor, '异常处置')
         inc = task.incidents.filter(id=incident_id).first()
         if not inc:
             raise ValidationError('异常事件不存在')

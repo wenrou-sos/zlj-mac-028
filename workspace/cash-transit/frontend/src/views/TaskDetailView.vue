@@ -29,28 +29,28 @@
         </div>
         <div class="head-actions">
           <template v-if="task.status === 'planned'">
-            <el-button v-if="task.direction === 'outbound' && pendingOutCount > 0"
+            <el-button v-if="canCaptain && task.direction === 'outbound' && pendingOutCount > 0"
                        type="warning" plain disabled>
               待出库 {{ pendingOutCount }}/{{ task.box_count }}
             </el-button>
-            <el-button v-if="task.direction === 'outbound' && pendingOutCount === 0"
+            <el-button v-if="canKeeper && task.direction === 'outbound' && pendingOutCount === 0"
                        type="success" plain>
               <el-icon><CircleCheck /></el-icon> 出库核对完成
             </el-button>
-            <el-button type="primary" :loading="acting" @click="doDepart">
+            <el-button v-if="canCaptain" type="primary" :loading="acting" @click="doDepart">
               <el-icon><Promotion /></el-icon> 出发
             </el-button>
           </template>
           <template v-if="['planned', 'in_transit', 'abnormal'].includes(task.status)">
-            <el-button type="danger" plain @click="incDialog = true">
+            <el-button v-if="canReportIncident" type="danger" plain @click="incDialog = true">
               <el-icon><Warning /></el-icon> 上报异常
             </el-button>
-            <el-button v-if="task.status === 'in_transit'" type="success"
+            <el-button v-if="isDispatcher && task.status === 'in_transit'" type="success"
                        @click="doComplete">
               <el-icon><Flag /></el-icon> 办结任务
             </el-button>
           </template>
-          <el-button v-if="!['completed', 'cancelled'].includes(task.status)"
+          <el-button v-if="isDispatcher && !['completed','cancelled'].includes(task.status)"
                      type="info" plain @click="askCancel">取消任务</el-button>
         </div>
       </div>
@@ -107,11 +107,11 @@
 
               <div style="padding:0 4px 10px 30px">
                 <div class="stop-toolbar">
-                  <el-button v-if="stop.status === 'en_route' && task.status === 'in_transit'"
+                  <el-button v-if="canCaptain && stop.status === 'en_route' && task.status === 'in_transit'"
                              size="small" type="primary" @click="doArrive(stop)">
                     <el-icon><Location /></el-icon> 到达网点
                   </el-button>
-                  <el-button v-if="stop.status === 'arrived'" size="small"
+                  <el-button v-if="canCaptain && stop.status === 'arrived'" size="small"
                              type="success" plain @click="doFinishStop(stop)">
                     跳过并办结本站
                   </el-button>
@@ -263,13 +263,17 @@
                 </div>
                 <div class="inc-desc">{{ inc.description }}</div>
                 <div class="hl dim">上报：{{ inc.reported_by_name }} · {{ inc.created_at }}</div>
-                <template v-if="inc.status !== 'resolved'">
+                <template v-if="inc.status !== 'resolved' && isDispatcher">
                   <el-input v-model="resolveMap[inc.id]" type="textarea" :rows="2"
                             placeholder="处置说明（如：核对身份后重新录入验证码，款箱无误）"
                             style="margin-top:8px" />
                   <el-button size="small" type="success" style="margin-top:6px"
                              @click="doResolve(inc)">处置完成</el-button>
                 </template>
+                <el-tag v-else-if="inc.status !== 'resolved'" size="small"
+                        type="warning" style="margin-top:6px">
+                  待调度员处置
+                </el-tag>
                 <el-alert v-else type="success" :closable="false" show-icon
                           style="margin-top:8px"
                           :title="`已处置：${inc.resolution}（${inc.resolved_by_name} ${fmt(inc.resolved_at)}）`" />
@@ -294,8 +298,7 @@
     </el-row>
 
     <HandoverDialog v-model="hdVisible" :task-id="task.id" :tb="currentTb"
-                    :phase="currentPhase" :stop="currentStop" :staff="staff"
-                    :crew="crewMembers"
+                    :phase="currentPhase" :stop="currentStop"
                     @saved="reload" />
     <IncidentDialog v-model="incDialog" :task-id="task.id" :stops="task.stops"
                     @saved="reload" />
@@ -307,6 +310,8 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api/http'
+import { useAuthStore } from '../store/auth'
+import { isDispatcher as isDisp } from '../auth'
 import {
   BOX_TASK_STATUS, INCIDENT_STATUS, SEVERITY, STOP_STATUS, TASK_STATUS,
 } from '../constants'
@@ -315,8 +320,9 @@ import IncidentDialog from '../components/IncidentDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
+const me = computed(() => auth.user)
 const task = ref(null)
-const staff = ref([])
 const tab = ref('reconcile')
 const reconcile = ref(null)
 const acting = ref(false)
@@ -328,6 +334,21 @@ const incDialog = ref(false)
 const currentTb = ref(null)
 const currentPhase = ref('')
 const currentStop = ref(null)
+
+const isDispatcher = computed(() => isDisp(me.value))
+const myCrewRole = computed(() => {
+  if (!task.value || !me.value) return null
+  return task.value.assignees.find((a) => a.user === me.value.id)?.role_on_task || null
+})
+const isTaskCaptain = computed(() => myCrewRole.value === 'car_captain')
+const isTaskGuard = computed(() =>
+  ['car_captain', 'guard'].includes(myCrewRole.value))
+const canCaptain = computed(() => isTaskCaptain.value)
+const canKeeper = computed(() =>
+  me.value?.role === 'vault_keeper' && task.value
+  && me.value.branch === task.value.depot)
+const canReportIncident = computed(() =>
+  isDispatcher.value || isTaskGuard.value)
 
 const pendingOutCount = computed(() =>
   task.value.stops.reduce((n, s) =>
@@ -341,19 +362,8 @@ const inboundReturnable = computed(() =>
 const openIncidentCount = computed(() =>
   task.value.incidents.filter((i) => i.status !== 'resolved').length)
 
-const crewMembers = computed(() =>
-  (task.value?.assignees || []).map((a) => ({
-    id: a.user,
-    name: a.user_name,
-    employee_no: a.user_employee_no,
-    position: a.role_on_task === 'car_captain' ? 'car_captain'
-      : a.role_on_task === 'driver' ? 'driver' : 'escort_guard',
-    role: a.role_on_task === 'driver' ? 'driver' : 'guard',
-  })))
-
 async function reload() {
   task.value = await api.get(`/api/tasks/${route.params.id}/`)
-  staff.value = (await api.get('/api/staff/', { params: { page_size: 200 } })).results
   if (tab.value === 'reconcile') await loadReconcile()
   // 自动展开进行中的站
   activeStops.value = task.value.stops
@@ -366,19 +376,40 @@ async function onTab(name) {
   if (name === 'reconcile') await loadReconcile()
 }
 
+// 仅当当前登录人有权办理该环节时，才显示交接按钮
+function canRecord(phase) {
+  if (isDispatcher.value) return true
+  if (phase === 'vault_out' || phase === 'vault_return') return canKeeper.value
+  // 网点交接：本任务车组 或 本站网点柜员
+  if (isTaskGuard.value) return true
+  if (me.value?.role === 'branch_clerk') {
+    // 柜员只能在到达本站后办理本站交接（具体站点由 tb.target_stop 决定）
+    return true
+  }
+  return false
+}
+
 function boxAction(tb, stop) {
   const t = task.value
   if (t.status === 'abnormal') return null
   if (t.direction === 'outbound') {
-    if (tb.status === 'pending_out' && t.status === 'planned')
-      return { phase: 'vault_out', label: '金库出库' }
-    if (tb.status === 'in_transit' && stop.status === 'arrived')
-      return { phase: 'branch_recv', label: '网点接收' }
+    if (tb.status === 'pending_out' && t.status === 'planned') {
+      const phase = 'vault_out'
+      return canRecord(phase) ? { phase, label: '金库出库' } : null
+    }
+    if (tb.status === 'in_transit' && stop.status === 'arrived') {
+      const phase = 'branch_recv'
+      return canRecord(phase) ? { phase, label: '网点接收' } : null
+    }
   } else {
-    if (tb.status === 'pending_out' && stop.status === 'arrived')
-      return { phase: 'branch_pickup', label: '网点移交' }
-    if (tb.status === 'in_transit')
-      return { phase: 'vault_return', label: '金库回库' }
+    if (tb.status === 'pending_out' && stop.status === 'arrived') {
+      const phase = 'branch_pickup'
+      return canRecord(phase) ? { phase, label: '网点移交' } : null
+    }
+    if (tb.status === 'in_transit') {
+      const phase = 'vault_return'
+      return canRecord(phase) ? { phase, label: '金库回库' } : null
+    }
   }
   return null
 }

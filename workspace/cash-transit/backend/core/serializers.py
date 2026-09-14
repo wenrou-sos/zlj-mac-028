@@ -100,6 +100,20 @@ class RouteSerializer(RouteListSerializer):
 
 # ---------- 人员（简要） ----------
 
+class UserBriefSerializer(serializers.ModelSerializer):
+    """交接候选人简要信息（任务范围内可见）。"""
+    role_display = serializers.CharField(source='get_role_display', read_only=True)
+    position_display = serializers.CharField(source='get_position_display', read_only=True)
+    branch_name = serializers.CharField(source='branch.name', read_only=True, default='')
+    duty_display = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = ['id', 'name', 'employee_no', 'role', 'role_display',
+                  'position', 'position_display', 'phone', 'branch',
+                  'branch_name', 'active_duty', 'duty_display']
+
+
 class StaffBriefSerializer(serializers.ModelSerializer):
     role_display = serializers.CharField(source='get_role_display', read_only=True)
     position_display = serializers.CharField(source='get_position_display', read_only=True)
@@ -257,7 +271,8 @@ class TaskListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Task
         fields = ['id', 'task_no', 'name', 'direction', 'direction_display',
-                  'route', 'route_name', 'depot_name', 'vehicle', 'vehicle_plate',
+                  'route', 'route_name', 'depot', 'depot_name', 'vehicle',
+                  'vehicle_plate',
                   'planned_date', 'planned_depart', 'planned_return',
                   'actual_depart', 'actual_return', 'status', 'status_display',
                   'box_count', 'finished_box_count', 'total_amount',

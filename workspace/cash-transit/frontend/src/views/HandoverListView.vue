@@ -1,6 +1,8 @@
 <template>
   <div class="page-container">
     <h2 class="page-title">交接记录</h2>
+    <el-alert type="info" :closable="false" show-icon style="margin-bottom:12px"
+              :title="scopeHint" />
     <el-card>
       <div class="toolbar">
         <el-select v-model="filters.phase" placeholder="交接环节" clearable
@@ -66,9 +68,20 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, computed } from 'vue'
 import api from '../api/http'
 import { PHASE } from '../constants'
+import { useAuthStore } from '../store/auth'
+
+const auth = useAuthStore()
+const scopeHint = computed(() => ({
+  dispatcher: '全部任务的款箱交接记录',
+  admin: '全部任务的款箱交接记录',
+  vault_keeper: '仅本金库出入库交接记录',
+  guard: '仅本人随车任务的交接记录',
+  driver: '仅本人随车任务的交接记录（只读）',
+  branch_clerk: '仅本网点停靠交接记录',
+}[auth.user?.role] || '交接记录'))
 
 const rows = ref([])
 const loading = ref(false)
